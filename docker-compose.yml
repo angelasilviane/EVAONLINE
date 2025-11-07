@@ -1,0 +1,347 @@
+# =====================================================
+# DOCKER-COMPOSE MULTI-STAGE - EVAonline
+# Atualizado para usar pyproject.toml como única fonte de dependências
+# =====================================================
+
+services:
+  # =====================================================
+  # PostgreSQL Database
+  # =====================================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: evaonline-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-evaonline}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-evaonline}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=200"
+      - "-c"
+      - "shared_buffers=256MB"
+      # 🔥 REMOVIDO: SSL em desenvolvimento (causa problemas desnecessários)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-evaonline}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - evaonline-network
+
+  # =====================================================
+  # Redis Cache & Message Broker
+  # =====================================================
+  redis:
+    image: redis:7-alpine
+    container_name: evaonline-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - evaonline-network
+
+  # =====================================================
+  # API Production
+  # =====================================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime # ✅ Usa stage runtime do Dockerfile
+    container_name: evaonline-api
+    environment:
+      - SERVICE=api
+      - ENVIRONMENT=production
+      # 🔥 CORREÇÃO: Variáveis individuais em vez de DATABASE_URL
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-evaonline}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-evaonline}
+      - REDIS_HOST=redis
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - evaonline-network
+
+  # =====================================================
+  # API Development - Hot Reload
+  # =====================================================
+  api-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development # ✅ Stage development com hot-reload
+    container_name: evaonline-api-dev
+    environment:
+      - SERVICE=api
+      - ENVIRONMENT=development
+      - RELOAD=true
+      - LOG_LEVEL=DEBUG
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-evaonline}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-evaonline}
+      - REDIS_HOST=redis
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    volumes:
+      - .:/app # ✅ Montar projeto inteiro para hot-reload
+    ports:
+      - "8001:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - evaonline-network
+    profiles: ["dev"]
+
+  # =====================================================
+  # 🔥 CORREÇÃO: Test Runner - usa stage testing
+  # =====================================================
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: testing # ✅ Stage testing já inclui pytest e dependências
+    container_name: evaonline-test-runner
+    environment:
+      - SERVICE=api
+      - ENVIRONMENT=testing
+      - TESTING=true
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-evaonline}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-evaonline}
+      - REDIS_HOST=redis
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    volumes:
+      - .:/app # ✅ Montar código para testes
+      - ./test-reports:/app/test-reports # ✅ Relatórios de testes
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - evaonline-network
+    profiles: ["test"]
+    # 🔥 REMOVIDO: command explícito - usa CMD do Dockerfile testing stage
+
+  # =====================================================
+  # Celery Worker - Production
+  # =====================================================
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: evaonline-celery-worker
+    environment:
+      - SERVICE=worker
+      - ENVIRONMENT=production
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-evaonline}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-evaonline}
+      - REDIS_HOST=redis
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis:6379/0
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - evaonline-network
+
+  # =====================================================
+  # Celery Worker - Development
+  # =====================================================
+  celery-worker-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: evaonline-celery-worker-dev
+    environment:
+      - SERVICE=worker
+      - ENVIRONMENT=development
+      - LOG_LEVEL=DEBUG
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-evaonline}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-evaonline}
+      - REDIS_HOST=redis
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD}@redis:6379/0
+    volumes:
+      - .:/app # ✅ Hot-reload para tarefas Celery
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - evaonline-network
+    profiles: ["dev"]
+
+  # =====================================================
+  # Celery Beat - Scheduled Tasks
+  # =====================================================
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: evaonline-celery-beat
+    environment:
+      - SERVICE=beat
+      - ENVIRONMENT=production
+      - REDIS_HOST=redis
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - evaonline-network
+
+  # =====================================================
+  # Flower - Celery Monitoring
+  # =====================================================
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: evaonline-flower
+    environment:
+      - SERVICE=flower
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
+      # ✅ Autenticação básica
+      - FLOWER_BASIC_AUTH=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-admin}
+    ports:
+      - "5555:5555" # ✅ Acesso direto (sem proxy)
+    volumes:
+      - ./logs:/app/logs
+    depends_on:
+      - celery-worker
+      - redis
+    restart: unless-stopped
+    networks:
+      - evaonline-network
+
+  # =====================================================
+  # Prometheus - Métricas (acesso direto)
+  # =====================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: evaonline-prometheus
+    volumes:
+      - ./docker/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090" # ✅ Acesso direto: http://localhost:9090
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+    networks:
+      - evaonline-network
+    restart: unless-stopped
+
+  # =====================================================
+  # Grafana - Dashboards (acesso direto)
+  # =====================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: evaonline-grafana
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./docker/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    environment:
+      # ✅ Autenticação habilitada
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_USERS_ALLOW_ORG_CREATE=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      # ✅ URL pública
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_SERVER_SERVE_FROM_SUB_PATH=false
+    ports:
+      - "3000:3000" # ✅ Acesso direto: http://localhost:3000
+    depends_on:
+      - prometheus
+    networks:
+      - evaonline-network
+    restart: unless-stopped
+
+  # =====================================================
+  # Database Admin (Development Only)
+  # =====================================================
+  adminer:
+    image: adminer:4.8.1-standalone
+    container_name: evaonline-adminer
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: dracula
+    ports:
+      - "5050:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - evaonline-network
+    profiles: ["dev"]
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  evaonline-network:
+    driver: bridge

@@ -1,0 +1,563 @@
+# ===========================================
+# GITIGNORE - EVAonline (CLEAN AND ORGANIZED)
+# ===========================================
+# Última atualização: 2025-01-14
+# Foco: Mapa Mundial com Fusão de Dados (NASA POWER, MET Norway, NWS)
+# MATOPIBA removido em: 2025-01-14
+
+# ===========================================
+# Python
+# ===========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# ===========================================
+# Virtual Environments
+# ===========================================
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# ===========================================
+# Testing and Coverage
+# ===========================================
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# ===========================================
+# Archive and Deprecated Files
+# ===========================================
+# Documentação arquivada (MATOPIBA, ETo Horária)
+docs/archive/
+docs/archive/matopiba/
+
+# Testes antigos/deprecados
+/tests/deprecated/
+!tests/conftest.py
+!tests/README.md
+!tests/*/README.md
+
+# Scripts de reorganização (desenvolvimento)
+reorganize_*.ps1
+reorganize_*.sh
+cleanup_*.ps1
+cleanup_*.sh
+
+# ===========================================
+# Docker
+# ===========================================
+.dockerignore
+docker-volumes/
+docker-data/
+docker-compose.override.yml  # Configuração local (NÃO COMMITAR)
+
+# ===========================================
+# Jupyter Notebook
+# ===========================================
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+.jupyter/
+
+# ===========================================
+# PyInstaller
+# ===========================================
+*.manifest
+*.spec
+
+# ===========================================
+# Database
+# ===========================================
+*.sql
+*.dump
+*.backup
+*.sqlite
+*.sqlite3
+data/db/
+data/postgres/
+data/redis/
+
+# ===========================================
+# Logs
+# ===========================================
+logs/
+*.log
+loguru/
+*.log.*
+
+# ===========================================
+# Assets Generation
+# ===========================================
+assets_generation/**/*.tmp
+assets_generation/**/*.temp
+assets_generation/**/__pycache__/
+assets_generation/**/.ipynb_checkpoints/
+
+# ===========================================
+# Backend Specific
+# ===========================================
+backend/**/__pycache__/
+backend/.pytest_cache/
+backend/logs/*.log
+
+# ===========================================
+# Large Data Files
+# ===========================================
+data/FILE_CSV/
+data/FILE_GEOJSON/
+data/SHAPEFILE_CLIMA_BR/
+data/large_files/
+data/backups/
+
+# Shapefiles MATOPIBA (removidos)
+data/shapefile/
+
+# CSVs MATOPIBA (removidos)
+data/csv/ST_PLOT.csv
+
+# ===========================================
+# Operating System
+# ===========================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+.nfs*
+
+# ===========================================
+# IDEs
+# ===========================================
+.vscode/
+!.vscode/extensions.json
+!.vscode/launch.example.json
+!.vscode/settings.example.json
+!.vscode/tasks.example.json
+.idea/
+*.swp
+*.swo
+*~
+
+# ===========================================
+# Distribution
+# ===========================================
+dist/
+build/
+*.egg-info/
+
+# ===========================================
+# Node.js (if used)
+# ===========================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+
+# ===========================================
+# Backup and Recovery
+# ===========================================
+*.bak
+*.backup
+*.old
+*~
+
+# ===========================================
+# Legacy requirements files
+# ===========================================
+requirements/
+requirements.txt
+requirements.txt.bak
+requirements.txt.old
+
+# ===========================================
+# Local Configurations
+# ===========================================
+config/local/
+config/development/
+config/production/
+
+# ===========================================
+# Secrets and Keys
+# ===========================================
+secrets/
+keys/
+*.key
+*.pem
+*.crt
+*.p12
+
+# ===========================================
+# Monitoring
+# ===========================================
+monitoring/prometheus/data/
+monitoring/grafana/data/
+
+# ===========================================
+# Temporary Documentation
+# ===========================================
+docs/temp/
+docs/drafts/
+
+# ===========================================
+# Redis
+# ===========================================
+*.rdb
+*.aof
+dump.rdb
+
+# ===========================================
+# Celery
+# ===========================================
+celerybeat-schedule
+celerybeat.pid
+celerybeat-schedule.db
+celery.log
+*.pid
+.celery
+celerybeat-schedule.*
+
+# ===========================================
+# Data Processing
+# ===========================================
+data/temp/
+data/cache/
+data/processing/
+*.processed
+*.intermediate
+eto_temp/
+eto_cache/
+gis_temp/
+shapefile_temp/
+
+# ===========================================
+# Testing & Development
+# ===========================================
+test_output/
+test_results/
+*.test
+*_test_output.*
+*.prof
+*.lprof
+profile_output/
+
+# Testes MATOPIBA (removidos)
+test_matopiba*.py
+*matopiba*_test.py
+
+# ===========================================
+# Jupyter Enhanced
+# ===========================================
+*.nbconvert.ipynb
+*.nbconvert.html
+
+# ===========================================
+# Environment Enhanced
+# ===========================================
+.env.backup
+.env.old
+.env.production
+.env.staging
+.env.test
+.venv*/
+venv*/
+env*/
+ENV*/
+conda-env/
+
+# ===========================================
+# IDE Enhanced
+# ===========================================
+*.code-workspace
+.history/
+*.iml
+*.iws
+.idea_modules/
+*.sublime-project
+*.sublime-workspace
+
+# ===========================================
+# OS Enhanced
+# ===========================================
+desktop.ini
+System Volume Information/
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# ===========================================
+# Development & Testing
+# ===========================================
+# Scripts de reorganização
+reorganize_project.ps1
+cleanup_project.ps1
+
+# Testes temporários na raiz (manter testes organizados em tests/)
+/test_*.py
+/debug_*.py
+/analyze_*.py
+*_test.py
+temp_*.py
+*_temp.py
+*_backup.py
+*_old.py
+dev_*.log
+development_*.log
+*_api_test.py
+dev_notebooks/
+test_notebooks/
+*.config.tmp
+*.yml.tmp
+*.yaml.tmp
+
+# ===========================================
+# Security
+# ===========================================
+passwords.txt
+credentials.txt
+tokens/
+*.token
+
+# ===========================================
+# Performance & Debugging
+# ===========================================
+perf_*.log
+performance_*.log
+debug_*.log
+*.debug
+*.dmp
+*.mdmp
+core
+core.*
+!backend/core/
+!backend/core/**
+
+# ===========================================
+# Backup Files
+# ===========================================
+*.sql.backup
+*.dump.backup
+*.tar.gz.backup
+*.zip.backup
+*.py.backup
+*.js.backup
+*.html.backup
+*.yml.backup
+*.yaml.backup
+*.json.backup
+docker-compose.backup
+Dockerfile.backup
+.env.backup
+*.md.backup
+README.backup
+
+# ===========================================
+# Async Migration (2025-10-14 - 2025-10-15)
+# ===========================================
+# Legacy synchronous files (deprecated)
+*.deprecated
+*_legacy.py
+*_sync.py.old
+openmeteo.py.bak
+openmeteo.py.old
+
+# Migration artifacts
+migration_backup/
+async_migration_backup/
+elevation_migration_backup/
+
+# Arquivos deletados durante migração (não recriar)
+backend/api/services/openmeteo.py
+
+# ===========================================
+# Cleanup and Reorganization Artifacts
+# ===========================================
+archive/
+reorganize*.ps1
+cleanup*.ps1
+docker-compose.override.yml
+
+# ===========================================
+# Celery
+# ===========================================
+celerybeat-schedule
+celerybeat.pid
+*.celerybeat.db
+
+# ===========================================
+# Project Specific Files (KEPT)
+# ===========================================
+!translations/en.json
+!translations/pt.json
+!templates/custom_layer.html
+!docker/backend/Dockerfile
+!docker/backend/entrypoint.sh
+!docker/nginx/Dockerfile
+!docker/nginx/nginx.conf
+!docker/monitoring/prometheus/Dockerfile
+!docker/monitoring/prometheus.yml
+!docker/monitoring/grafana/provisioning/**/*.yml
+!docker/monitoring/grafana/dashboards/**/*.json
+!data/FILE_CSV/*.csv
+!data/FILE_GEOJSON/*.geojson
+!data/SHAPEFILE_CLIMA_BR/*.shp
+!data/SHAPEFILE_CLIMA_BR/*.shx
+!start-monitoring.sh
+!start-monitoring.bat
+!GRAFANA_README.md
+
+# ===========================================
+# MATOPIBA - REMOVIDOS (2025-01-14)
+# ===========================================
+# Os seguintes arquivos/pastas foram DELETADOS:
+# - assets/leaflet-heatmap.js
+# - assets/matopiba-heatmap.js
+# - assets_generation/maps/matopiba_map.py
+# - backend/api/services/openmeteo_matopiba_client.py
+# - backend/api/routes/matopiba.py
+# - backend/core/eto_calculation/eto_matopiba.py
+# - backend/core/eto_calculation/eto_hourly.py
+# - backend/infrastructure/celery/tasks/matopiba_forecast_task.py
+# - backend/tests/test_matopiba_integration.py
+# - frontend/components/matopiba_forecast_maps.py
+# - scripts/trigger_matopiba_forecast.py
+# - scripts/debug_metrics.py
+# - scripts/get_hourly_data.py
+# - scripts/integrate_openmeteo_postgres.py
+# - tests/integration/test_pipeline_hourly.py
+# - tests/integration/test_openmeteo_hourly.py
+# - data/csv/ST_PLOT.csv
+# - data/shapefile/ (pasta completa)
+# - database/migrations/create_matopiba_runs_table.sql
+# - docs/architecture/matopiba_sequence_diagram.mmd
+#
+# Documentação movida para: docs/archive/matopiba/
+# Arquivos mantidos (referência histórica):
+# - data/csv/CITIES_MATOPIBA_337.csv
+# - data/geojson/Matopiba_Perimetro.geojson
+
+# ===========================================
+# Type Checkers & Linters
+# ===========================================
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+.pylint.d/
+
+# ===========================================
+# CI/CD
+# ===========================================
+coverage.xml
+.coverage.*
+htmlcov/
+
+# ===========================================
+# Build Artifacts
+# ===========================================
+build_log.txt
+*.whl
+
+# ===========================================
+# Temporary Files and Outputs
+# ===========================================
+temp/
+tmp/
+*.tmp
+*.temp
+temp/*.conf
+temp/*.output
+temp/*.result
+.cache/
+temp/*.csv
+temp/*.json
+temp/*.xlsx
+markers_response.json
+markers_test.json
+test_markers.json
+validation_nasa_power.md
+temp/*
+!temp/.gitkeep
+!temp/README.md
+
+# Logs (manter estrutura com .gitkeep)
+logs/*.log
+!logs/.gitkeep
+!logs/README.md
+
+# Cache adicional
+.benchmarks/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+
+!data/SHAPEFILE_CLIMA_BR/*.dbf
+!start-monitoring.sh
+!start-monitoring.bat
+!GRAFANA_README.md

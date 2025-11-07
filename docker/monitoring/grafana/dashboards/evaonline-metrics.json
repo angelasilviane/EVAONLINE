@@ -1,0 +1,157 @@
+{
+    "dashboard": {
+        "title": "EVAonline - Admin Dashboard",
+        "uid": "evaonline-admin",
+        "tags": [
+            "evaonline",
+            "admin"
+        ],
+        "timezone": "America/Sao_Paulo",
+        "refresh": "30s",
+        "panels": [
+            {
+                "id": 1,
+                "title": "🟢 API Health Status",
+                "type": "stat",
+                "targets": [
+                    {
+                        "expr": "up{job='evaonline-api'}",
+                        "legendFormat": "API Status"
+                    }
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "mappings": [
+                            {
+                                "type": "value",
+                                "options": {
+                                    "0": {
+                                        "text": "❌ Down",
+                                        "color": "red"
+                                    },
+                                    "1": {
+                                        "text": "✅ Up",
+                                        "color": "green"
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                },
+                "gridPos": {
+                    "h": 4,
+                    "w": 6,
+                    "x": 0,
+                    "y": 0
+                }
+            },
+            {
+                "id": 2,
+                "title": "📊 Requisições por Segundo",
+                "type": "graph",
+                "targets": [
+                    {
+                        "expr": "rate(http_requests_total{job='evaonline-api'}[5m])",
+                        "legendFormat": "{{method}} {{path}}"
+                    }
+                ],
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 0,
+                    "y": 4
+                }
+            },
+            {
+                "id": 3,
+                "title": "⏱️ Latência Média (95th percentile)",
+                "type": "graph",
+                "targets": [
+                    {
+                        "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))",
+                        "legendFormat": "p95 latency"
+                    }
+                ],
+                "gridPos": {
+                    "h": 8,
+                    "w": 12,
+                    "x": 12,
+                    "y": 4
+                }
+            },
+            {
+                "id": 4,
+                "title": "🗄️ PostgreSQL - Conexões Ativas",
+                "type": "graph",
+                "targets": [
+                    {
+                        "expr": "pg_stat_activity_count{state='active'}",
+                        "legendFormat": "Active"
+                    }
+                ],
+                "gridPos": {
+                    "h": 6,
+                    "w": 8,
+                    "x": 0,
+                    "y": 12
+                }
+            },
+            {
+                "id": 5,
+                "title": "💾 Redis - Hit Rate",
+                "type": "gauge",
+                "targets": [
+                    {
+                        "expr": "redis_keyspace_hits_total / (redis_keyspace_hits_total + redis_keyspace_misses_total) * 100"
+                    }
+                ],
+                "fieldConfig": {
+                    "defaults": {
+                        "unit": "percent",
+                        "min": 0,
+                        "max": 100,
+                        "thresholds": {
+                            "steps": [
+                                {
+                                    "value": 0,
+                                    "color": "red"
+                                },
+                                {
+                                    "value": 70,
+                                    "color": "yellow"
+                                },
+                                {
+                                    "value": 90,
+                                    "color": "green"
+                                }
+                            ]
+                        }
+                    }
+                },
+                "gridPos": {
+                    "h": 6,
+                    "w": 8,
+                    "x": 8,
+                    "y": 12
+                }
+            },
+            {
+                "id": 6,
+                "title": "🔥 Celery - Tarefas Ativas",
+                "type": "stat",
+                "targets": [
+                    {
+                        "expr": "celery_active_tasks",
+                        "legendFormat": "Active Tasks"
+                    }
+                ],
+                "gridPos": {
+                    "h": 6,
+                    "w": 8,
+                    "x": 16,
+                    "y": 12
+                }
+            }
+        ]
+    }
+}

@@ -1,0 +1,56 @@
+# =============================================================================
+# PROMETHEUS CONFIGURATION - EVAonline
+# Simplificado: monitora apenas API, Redis e PostgreSQL
+# =============================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    environment: "production"
+    cluster: "evaonline"
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus itself
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+    metrics_path: /metrics
+
+  # EVAonline API (FastAPI + /metrics endpoint)
+  - job_name: "evaonline-api"
+    static_configs:
+      - targets: ["api:8000"]
+    scrape_timeout: 10s
+    metrics_path: /metrics
+
+  # Health check monitoring (blackbox-style)
+  - job_name: "evaonline-health"
+    static_configs:
+      - targets: ["api:8000"]
+    scrape_timeout: 5s
+    metrics_path: /health
+# Storage configuration
+# storage:
+#   tsdb:
+#     path: /prometheus
+#     retention:
+#       time: 30d
+# Remote write configuration (optional)
+# remote_write:
+#   - url: https://prometheus-cloud.example.com/api/v1/write
+#     basic_auth:
+#       username: your-username
+#       password: your-password
+#     queue_config:
+#       max_samples_per_send: 1000
+#       max_shards: 200
+#       capacity: 10000
+
+# Remote read configuration (optional)
+# remote_read:
+#   - url: https://prometheus-cloud.example.com/api/v1/read
+#     basic_auth:
+#       username: your-username
+#       password: your-password

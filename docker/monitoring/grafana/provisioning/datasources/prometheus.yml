@@ -1,0 +1,9 @@
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy # acesso via Grafana
+    url: http://prometheus:9090 # conecta ao container Prometheus
+    isDefault: true # definido como datasource padrão
+    editable: true # permite edições via interface
