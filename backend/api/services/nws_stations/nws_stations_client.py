@@ -100,17 +100,20 @@ class NWSObservation(BaseModel):
         - Precipitação <0.4" pode ser reportada como 0 (rounding)
 
     Attributes:
-        station_id: ID da estação (ex: KJFK)
-        timestamp: Timestamp da observação (timezone-aware) - usado para agregação diária
-        temp_celsius: Temperatura atual em °C
-        temp_max_24h: Temperatura máxima últimas 24h em °C
-        temp_min_24h: Temperatura mínima últimas 24h em °C
-        dewpoint_celsius: Ponto de orvalho em °C (backup para calcular RH)
-        humidity_percent: Umidade relativa (0-100%)
-        wind_speed_ms: Velocidade do vento a 10m (m/s) - original da API
-        wind_speed_2m_ms: Velocidade do vento a 2m (m/s) - convertido para FAO-56 PM
-        precipitation_1h_mm: Precipitação última hora em mm
-        is_delayed: Flag indicando se observação está atrasada (>20min) - controle de qualidade
+        - station_id: ID da estação (ex: KJFK)
+        - timestamp: Timestamp da observação (timezone-aware):
+           para agregação diária
+        - temp_celsius: Temperatura atual em °C
+        - temp_max_24h: Temperatura máxima últimas 24h em °C
+        - temp_min_24h: Temperatura mínima últimas 24h em °C
+        - dewpoint_celsius: Ponto de orvalho em °C (backup para calcular RH)
+        - humidity_percent: Umidade relativa (0-100%)
+        - wind_speed_ms: Velocidade do vento a 10m (m/s) - original da API
+        - wind_speed_2m_ms: Velocidade do vento a 2m (m/s):
+          convertido para FAO-56 PM
+        - precipitation_1h_mm: Precipitação última hora em mm
+        - is_delayed: Flag indicando se observação está atrasada (>20min):
+          controle de qualidade
     """
 
     station_id: str = Field(..., description="ID da estação")

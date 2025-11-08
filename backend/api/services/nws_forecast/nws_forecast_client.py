@@ -67,10 +67,7 @@ class NWSConfig(BaseModel):
     retry_delay: float = 1.0
     user_agent: str = os.getenv(
         "NWS_USER_AGENT",
-        (
-            "EVAonline/1.0 "
-            "(https://github.com/angelacunhasoares/EVAonline_SoftwareX)"
-        ),
+        ("EVAonline/1.0 " "(https://github.com/angelassilviane/EVAONLINE)"),
     )
 
 

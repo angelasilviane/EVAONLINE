@@ -7,28 +7,21 @@ from sqlalchemy import engine_from_config, pool
 from alembic import context
 
 # Adicionar o diretório backend ao path para imports
-backend_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "backend")
+backend_path = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "backend"
+)
 sys.path.insert(0, backend_path)
 
 # Importar os modelos com validação de segurança
 try:
     from backend.database.connection import Base
 
-    # from backend.database.models import (
-    #     AdminUser,
-    #     CacheMetadata,
-    #     EToResults,
-    #     FavoriteLocation,
-    #     UserFavorites,
-    #     UserSessionCache,
-    #     VisitorStats,
-    # )
-    # # Importar modelos específicos que podem não estar no __init__
-    # from backend.database.models.visitor_stats import Visitor
-
 except ImportError as e:
     print(f"❌ Erro ao importar modelos: {e}")
-    print("Certifique-se de que o ambiente virtual está ativado e as " "dependências instaladas")
+    print(
+        "Certifique-se de que o ambiente virtual está ativado e as "
+        "dependências instaladas"
+    )
     sys.exit(1)
 
 # this is the Alembic Config object, which provides
@@ -97,7 +90,9 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection, target_metadata=target_metadata
+        )
 
         with context.begin_transaction():
             context.run_migrations()

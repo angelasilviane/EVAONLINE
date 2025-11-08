@@ -27,7 +27,7 @@ from datetime import datetime
 from loguru import logger
 from redis import Redis
 
-from config.settings import settings
+from backend.core.config import settings
 
 # API Limits (requests per day)
 API_LIMITS = {

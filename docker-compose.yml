@@ -5,10 +5,10 @@
 
 services:
   # =====================================================
-  # PostgreSQL Database
+  # PostgreSQL Database with PostGIS
   # =====================================================
   postgres:
-    image: postgres:16-alpine
+    image: postgis/postgis:16-3.4
     container_name: evaonline-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-evaonline}
@@ -16,6 +16,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-evaonline}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432" # Expor porta para desenvolvimento local
     restart: unless-stopped
     command:
       - "postgres"
@@ -41,6 +43,8 @@ services:
     command: redis-server --requirepass ${REDIS_PASSWORD}
     volumes:
       - redis_data:/data
+    ports:
+      - "6379:6379" # Expor porta para desenvolvimento local
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]

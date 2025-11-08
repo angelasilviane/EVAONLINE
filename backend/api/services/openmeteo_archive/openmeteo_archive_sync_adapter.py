@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Union
 import pandas as pd
 from loguru import logger
 
-from backend.api.services.openmeteo_archive_client import (
+from .openmeteo_archive_client import (
     OpenMeteoArchiveClient,
 )
 

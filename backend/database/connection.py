@@ -36,8 +36,10 @@ if not PG_PASSWORD:
     raise ValueError(msg)
 
 # URL de conexão com o PostgreSQL (senha codificada para segurança)
+# Usando psycopg3 (psycopg-binary) em vez de psycopg2
 DATABASE_URL = (
-    f"postgresql://{quote_plus(PG_USER)}:{quote_plus(PG_PASSWORD)}" f"@{PG_HOST}:{PG_PORT}/{PG_DB}"
+    f"postgresql+psycopg://{quote_plus(PG_USER)}:{quote_plus(PG_PASSWORD)}"
+    f"@{PG_HOST}:{PG_PORT}/{PG_DB}"
 )
 
 # Criar engine SQLAlchemy com configurações otimizadas para produção

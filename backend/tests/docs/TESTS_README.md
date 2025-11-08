@@ -112,7 +112,7 @@ Gera um resumo final com status de cada teste.
 
 ## 🔧 Requisitos
 
-- Python 3.11+
+- Python 3.12+
 - Ambiente virtual ativado (.venv)
 - Dependências instaladas: `pip install -e .`
 - PostgreSQL rodando (localhost:5432)

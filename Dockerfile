@@ -6,7 +6,7 @@
 # ===========================================
 # Stage 1: Builder - Production Dependencies
 # ===========================================
-FROM python:3.11-slim AS builder-prod
+FROM python:3.12-slim AS builder-prod
 
 # Metadata para melhor rastreabilidade da imagem
 LABEL maintainer="Ângela Cunha Soares <angelassilviane@gmail.com>"
@@ -50,7 +50,7 @@ RUN pip install --no-cache-dir --user .[dev]
 # ===========================================
 # Stage 2: Runtime (Production) - IMAGEM FINAL LEVE
 # ===========================================
-FROM python:3.11-slim AS runtime
+FROM python:3.12-slim AS runtime
 
 # Metadata da imagem final
 LABEL maintainer="Ângela Cunha Soares <angelassilviane@gmail.com>"

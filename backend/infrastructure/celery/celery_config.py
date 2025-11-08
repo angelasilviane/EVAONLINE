@@ -17,16 +17,22 @@ from backend.api.middleware.prometheus_metrics import (
 )
 
 # from config.settings import get_settings
-from config.settings.app_config import get_settings
+from config.settings.app_config import (
+    get_celery_broker_url,
+    get_celery_result_backend,
+    get_legacy_settings,
+)
 
-# Carregar configurações
-settings = get_settings()
+# Carregar configurações (compatibilidade/URLs do Celery)
+broker_url = get_celery_broker_url()
+result_backend = get_celery_result_backend()
+legacy_settings = get_legacy_settings()
 
 # Inicializar Celery
 celery_app = Celery(
     "evaonline",
-    broker=settings.CELERY_BROKER_URL,
-    backend=settings.CELERY_RESULT_BACKEND,
+    broker=broker_url,
+    backend=result_backend,
 )
 
 # Métricas Prometheus
@@ -38,9 +44,8 @@ class MonitoredProgressTask(celery_app.Task):
     def publish_progress(self, task_id, progress, status="PROGRESS"):
         """Publica progresso no canal Redis para WebSocket."""
         try:
-            redis_client = Redis.from_url(
-                settings.CELERY_BROKER_URL, decode_responses=True
-            )
+            # Usar broker_url configurado (compatibilidade)
+            redis_client = Redis.from_url(broker_url, decode_responses=True)
             redis_client.publish(
                 f"task_status:{task_id}",
                 json.dumps(

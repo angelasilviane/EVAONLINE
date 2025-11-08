@@ -60,7 +60,7 @@ class METNorwayLocationForecastConfig(BaseModel):
     # User-Agent required (MET Norway requires identification)
     user_agent: str = os.getenv(
         "MET_NORWAY_USER_AGENT",
-        "EVAonline/1.0 (https://github.com/angelassilviane/Evaonline_Temp)",
+        "EVAonline/1.0 (https://github.com/angelassilviane/EVAONLINE)",
     )
 
 

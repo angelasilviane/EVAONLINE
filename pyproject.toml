@@ -11,7 +11,7 @@ name = "evaonline"
 version = "1.0.0"
 description = "An online tool for reference EVApotranspiration estimation"
 readme = "README.md"
-requires-python = ">=3.12.10"
+requires-python = ">=3.12"
 license = "AGPL-3.0"
 
 # Autores
@@ -46,7 +46,7 @@ dependencies = [
 
     # Database (atualizado)
     "sqlalchemy>=2.0.44",
-    "psycopg-binary>=3.2.12",
+    "psycopg[binary]>=3.2.12",  # Inclui psycopg + psycopg-binary
     "alembic>=1.17.1",
     "geoalchemy2>=0.18.0",
 
