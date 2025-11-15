@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from typing import Dict, Optional
 from uuid import uuid4
 
-
 from backend.database.models.visitor_stats import Visitor
 from backend.database.connection import get_db_context
 
@@ -62,6 +61,16 @@ class GeolocationService:
             ...     city="Brasília"
             ... )
         """
+        # Detectar região climática se geolocalização fornecida
+        climate_region = None
+        if geolocation:
+            lat = geolocation.get("latitude")
+            lon = geolocation.get("longitude")
+            if lat is not None and lon is not None:
+                climate_region = GeolocationService._detect_climate_region(
+                    lat, lon
+                )
+
         with get_db_context() as db:
             # Buscar visitante existente
             visitor = (
@@ -88,9 +97,14 @@ class GeolocationService:
                 if city:
                     visitor.city = city
 
+                # Atualizar região climática
+                if climate_region:
+                    visitor.climate_region = climate_region
+
                 logger.info(
                     f"✅ Visitante atualizado: {visitor_id} "
-                    f"(visita #{visitor.visit_count})"
+                    f"(visita #{visitor.visit_count}, "
+                    f"região: {climate_region})"
                 )
             else:
                 # Criar novo visitante
@@ -117,12 +131,16 @@ class GeolocationService:
                     ),
                     country=country,
                     city=city,
+                    climate_region=climate_region,
                     device_type=device_info.get("device_type"),
                     browser=device_info.get("browser"),
                     os=device_info.get("os"),
                 )
                 db.add(visitor)
-                logger.info(f"✅ Novo visitante criado: {visitor_id}")
+                logger.info(
+                    f"✅ Novo visitante criado: {visitor_id} "
+                    f"(região: {climate_region})"
+                )
 
             db.commit()
             db.refresh(visitor)
@@ -201,6 +219,33 @@ class GeolocationService:
             else:
                 logger.warning(f"⚠️ Visitante não encontrado: {visitor_id}")
                 return False
+
+    @staticmethod
+    def _detect_climate_region(latitude: float, longitude: float) -> str:
+        """
+        Detecta região climática (USA, Nordic, ou global).
+
+        Args:
+            latitude: Latitude da localização
+            longitude: Longitude da localização
+
+        Returns:
+            String: "usa", "nordic" ou "global"
+        """
+        # Bounding boxes para detecção geográfica
+        # USA Continental: (-125, 24, -66, 49) = (W, S, E, N)
+        # Nordic: (4, 54, 31, 71.5) = (W, S, E, N)
+
+        # Verificar se está nos EUA
+        if -125.0 <= longitude <= -66.0 and 24.0 <= latitude <= 49.0:
+            return "usa"
+
+        # Verificar se está na região Nórdica
+        if 4.0 <= longitude <= 31.0 and 54.0 <= latitude <= 71.5:
+            return "nordic"
+
+        # Global para todas as outras regiões
+        return "global"
 
     @staticmethod
     def _parse_user_agent(user_agent: str) -> Dict[str, Optional[str]]:

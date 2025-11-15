@@ -43,6 +43,14 @@ import httpx
 from loguru import logger
 from pydantic import BaseModel, Field
 
+# Import para detecção regional (fonte única)
+try:
+    from backend.api.services.geographic_utils import (
+        GeographicUtils,
+    )
+except ImportError:
+    from ..geographic_utils import GeographicUtils
+
 
 class NWSStationsConfig(BaseModel):
     """
@@ -177,11 +185,6 @@ class NWSStationsClient:
     General FAQs: https://weather-gov.github.io/api/general-faqs
     """
 
-    # Bounding box USA Extended (inclui Alaska, Hawaii, territórios)
-    # Longitude: -180°W (Alaska) a -66°W (Maine)
-    # Latitude: 18°N (Hawaii/Puerto Rico) a 71.5°N (Alaska)
-    USA_BBOX = (-180.0, 18.0, -66.0, 71.5)
-
     def __init__(
         self,
         config: NWSStationsConfig | None = None,
@@ -226,8 +229,7 @@ class NWSStationsClient:
         Returns:
             bool: True se dentro do bbox USA
         """
-        lon_min, lat_min, lon_max, lat_max = self.USA_BBOX
-        in_bbox = (lon_min <= lon <= lon_max) and (lat_min <= lat <= lat_max)
+        in_bbox = GeographicUtils.is_in_usa(lat, lon)
 
         if not in_bbox:
             logger.warning(
@@ -304,6 +306,12 @@ class NWSStationsClient:
     ) -> list[NWSObservation]:
         """
         Busca observações de uma estação NWS.
+
+        IMPORTANTE: Este cliente ASSUME que:
+        - Coordenadas validadas em climate_validation.py
+        - Cobertura USA validada em climate_source_selector.py
+        - Period validado em climate_source_availability.py
+        Este cliente APENAS busca dados, sem re-validar.
 
         Args:
             station_id: ID da estação (ex: "KJFK")

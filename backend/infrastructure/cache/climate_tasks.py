@@ -930,14 +930,12 @@ def prefetch_met_norway_nordic_cities(self):
                     success_count += 1
                     total_days += len(data)
                     # Conta quantas são região Nordic (alta qualidade)
-                    from backend.api.services.met_norway_locationforecast_client import (  # noqa: E501
-                        METNorwayLocationForecastClient,
+                    from backend.api.services.met_norway.met_norway_client import (
+                        METNorwayClient,
                     )
 
-                    is_nordic = (
-                        METNorwayLocationForecastClient.is_in_nordic_region(
-                            city["lat"], city["lon"]
-                        )
+                    is_nordic = METNorwayClient.is_in_nordic_region(
+                        city["lat"], city["lon"]
                     )
                     if is_nordic:
                         nordic_count += 1

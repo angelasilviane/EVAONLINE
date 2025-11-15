@@ -21,27 +21,12 @@ Available APIs:
         Universal fallback (2-7 day delay)
 """
 
-from typing import Literal, Union
+from typing import Literal
 
 from loguru import logger
 
 from backend.api.services.climate_factory import ClimateClientFactory
-from backend.api.services.nasa_power.nasa_power_client import NASAPowerClient
-from backend.api.services.met_norway.met_norway_client import (
-    METNorwayClient,
-)
-from backend.api.services.nws_forecast.nws_forecast_client import (
-    NWSForecastClient,
-)
-from backend.api.services.nws_stations.nws_stations_client import (
-    NWSStationsClient,
-)
-from backend.api.services.openmeteo_archive.openmeteo_archive_client import (
-    OpenMeteoArchiveClient,
-)
-from backend.api.services.openmeteo_forecast.openmeteo_forecast_client import (
-    OpenMeteoForecastClient,
-)
+from backend.api.services.geographic_utils import GeographicUtils
 
 # Type hints for climate sources
 ClimateSource = Literal[
@@ -52,14 +37,6 @@ ClimateSource = Literal[
     "openmeteo_archive",
     "openmeteo_forecast",
 ]
-ClimateClient = Union[
-    NASAPowerClient,
-    METNorwayClient,
-    NWSForecastClient,
-    NWSStationsClient,
-    OpenMeteoArchiveClient,
-    OpenMeteoForecastClient,
-]
 
 
 class ClimateSourceSelector:
@@ -69,10 +46,8 @@ class ClimateSourceSelector:
     Determina automaticamente a melhor API para buscar dados climáticos
     baseado nas coordenadas geográficas fornecidas.
 
-    Bounding Boxes:
-        - USA: -125°W a -66°W, 24°N a 49°N (NWS)
-        - Nordic: 4°E a 31°E, 54°N a 71.5°N (MET Norway alta qualidade)
-        - Global: Qualquer coordenada (Open-Meteo, NASA POWER)
+    IMPORTANTE: Utiliza GeographicUtils para detecção de região
+    (SINGLE SOURCE OF TRUTH para bbox USA, Nordic, etc)
 
     Estratégia MET Norway:
         - Região Nórdica: Temperatura, Umidade, Precipitação
@@ -85,42 +60,6 @@ class ClimateSourceSelector:
         2. MET Norway (Nordic): Melhor precipitação do mundo
         3. Open-Meteo Forecast: Tempo real, alta qualidade global
         4. NASA POWER: Fallback com delay 2-7 dias
-    """
-
-    # Bounding boxes das fontes regionais
-    # Formato: (lon_min, lat_min, lon_max, lat_max) = (W, S, E, N)
-
-    USA_BBOX = (-125.0, 24.0, -66.0, 49.0)
-    """
-    Bounding box USA Continental (NWS).
-
-    Cobertura:
-        Longitude: -125°W (Costa Oeste) a -66°W (Costa Leste)
-        Latitude: 24°N (Sul da Flórida) a 49°N (Fronteira Canadá)
-
-    Estados incluídos:
-        Todos os 48 estados contíguos
-
-    Excluídos:
-        Alasca, Havaí, Porto Rico, territórios
-    """
-
-    NORDIC_BBOX = (4.0, 54.0, 31.0, 71.5)
-    """
-    Bounding box Região Nórdica (MET Norway 1km alta qualidade).
-
-    Cobertura:
-        Longitude: 4°E (Dinamarca Oeste) a 31°E (Finlândia/Bálticos)
-        Latitude: 54°N (Dinamarca Sul) a 71.5°N (Noruega Norte)
-
-    Países incluídos:
-        Noruega, Dinamarca, Suécia, Finlândia, Estônia, Letônia, Lituânia
-
-    Qualidade especial:
-        - Resolução: 1 km (vs 9km global)
-        - Atualizações: A cada hora (vs 4x/dia global)
-        - Precipitação: Radar + crowdsourced (Netatmo)
-        - Pós-processamento: Extensivo com bias correction
     """
 
     @classmethod
@@ -158,14 +97,14 @@ class ClimateSourceSelector:
             # → "openmeteo_forecast"
         """
         # Prioridade 1: USA (NWS Forecast)
-        if cls._is_in_usa(lat, lon):
+        if GeographicUtils.is_in_usa(lat, lon):
             logger.debug(
                 f"📍 Coordenadas ({lat}, {lon}) no USA → NWS Forecast"
             )
             return "nws_forecast"
 
         # Prioridade 2: Região Nórdica (MET Norway alta qualidade)
-        if cls._is_in_nordic(lat, lon):
+        if GeographicUtils.is_in_nordic(lat, lon):
             logger.debug(
                 f"📍 Coordenadas ({lat}, {lon}) na região NÓRDICA → "
                 f"MET Norway (1km, radar, precipitação alta qualidade)"
@@ -177,37 +116,7 @@ class ClimateSourceSelector:
         return "openmeteo_forecast"
 
     @classmethod
-    def _is_in_usa(cls, lat: float, lon: float) -> bool:
-        """
-        Verifica se coordenadas estão no bbox USA Continental.
-
-        Args:
-            lat: Latitude
-            lon: Longitude
-
-        Returns:
-            True se dentro do bbox NWS
-        """
-        lon_min, lat_min, lon_max, lat_max = cls.USA_BBOX
-        return (lon_min <= lon <= lon_max) and (lat_min <= lat <= lat_max)
-
-    @classmethod
-    def _is_in_nordic(cls, lat: float, lon: float) -> bool:
-        """
-        Verifica se coordenadas estão no bbox Região Nórdica.
-
-        Args:
-            lat: Latitude
-            lon: Longitude
-
-        Returns:
-            True se dentro do bbox MET Nordic (alta qualidade)
-        """
-        lon_min, lat_min, lon_max, lat_max = cls.NORDIC_BBOX
-        return (lon_min <= lon <= lon_max) and (lat_min <= lat <= lat_max)
-
-    @classmethod
-    def get_client(cls, lat: float, lon: float) -> ClimateClient:
+    def get_client(cls, lat: float, lon: float):
         """
         Retorna cliente apropriado para coordenadas.
 
@@ -279,12 +188,12 @@ class ClimateSourceSelector:
         sources = []
 
         # Fontes regionais (alta prioridade)
-        if cls._is_in_usa(lat, lon):
+        if GeographicUtils.is_in_usa(lat, lon):
             sources.append("nws_forecast")
             sources.append("nws_stations")
 
         # MET Norway tem prioridade na região nórdica
-        if cls._is_in_nordic(lat, lon):
+        if GeographicUtils.is_in_nordic(lat, lon):
             sources.append("met_norway")
             sources.append("openmeteo_forecast")
         else:
@@ -307,92 +216,45 @@ class ClimateSourceSelector:
         Returns:
             dict: Informações de disponibilidade por fonte
         """
-        from backend.api.services.met_norway.met_norway_client import (
-            METNorwayLocationForecastClient,
-        )
-        from backend.api.services.openmeteo_archive.openmeteo_archive_client import (
-            OpenMeteoArchiveClient,
-        )
-        from backend.api.services.openmeteo_forecast.openmeteo_forecast_client import (
-            OpenMeteoForecastClient,
-        )
-        from backend.api.services.nasa_power.nasa_power_client import (
-            NASAPowerClient,
-        )
-        from backend.api.services.nws_forecast.nws_forecast_client import (
-            NWSForecastClient,
-        )
-
-        summary = {}
-
-        # Open-Meteo Archive
-        try:
-            info = OpenMeteoArchiveClient.get_info()
-            summary["openmeteo_archive"] = {
-                "coverage": info["coverage"],
-                "period": info["period"],
-                "license": info["license"],
+        # Implementação estática sem imports circulares
+        summary = {
+            "openmeteo_archive": {
+                "coverage": "global",
+                "period": "1940-01-01 to today-2d",
+                "license": "CC-BY-4.0",
                 "description": "Historical weather data (1940-present)",
-            }
-        except Exception:
-            summary["openmeteo_archive"] = {"error": "Failed to get info"}
-
-        # Open-Meteo Forecast
-        try:
-            info = OpenMeteoForecastClient.get_info()
-            summary["openmeteo_forecast"] = {
-                "coverage": info["coverage"],
-                "period": info.get("period", "Up to 16 days ahead"),
-                "license": info["license"],
+            },
+            "openmeteo_forecast": {
+                "coverage": "global",
+                "period": "today-30d to today+5d",
+                "license": "CC-BY-4.0",
                 "description": "Forecast weather data (up to 16 days)",
-            }
-        except Exception:
-            summary["openmeteo_forecast"] = {"error": "Failed to get info"}
-
-        # NASA POWER
-        try:
-            info = NASAPowerClient.get_data_availability_info()
-            summary["nasa_power"] = {
-                "data_start_date": str(info["data_start_date"]),
-                "max_historical_years": info["max_historical_years"],
-                "coverage": info["coverage"],
-                "description": info["description"],
-            }
-        except Exception:
-            summary["nasa_power"] = {"error": "Failed to get info"}
-
-        # NWS
-        try:
-            nws_client = NWSForecastClient()
-            info = nws_client.get_data_availability_info()
-            summary["nws_forecast"] = {
-                "data_start_date": None,
-                "max_historical_years": 0,
-                "forecast_horizon_days": info["forecast_horizon_days"],
-                "coverage": info["coverage"],
-                "description": info["description"],
-            }
-            summary["nws_stations"] = {
-                "data_start_date": None,
-                "max_historical_years": 0,
-                "coverage": info["coverage"],
-                "description": "Recent observations from USA stations",
-            }
-        except Exception:
-            summary["nws"] = {"error": "Failed to get info"}
-
-        # MET Norway Locationforecast
-        try:
-            info = METNorwayLocationForecastClient.get_data_availability_info()
-            summary["met_norway"] = {
-                "data_start_date": None,
-                "max_historical_years": 0,
-                "forecast_horizon_days": info["forecast_horizon_days"],
-                "coverage": info["coverage"],
-                "description": info["description"],
-            }
-        except Exception:
-            summary["met_norway"] = {"error": "Failed to get info"}
+            },
+            "nasa_power": {
+                "coverage": "global",
+                "period": "1981-01-01 to today-2-7d",
+                "license": "Public Domain",
+                "description": "NASA POWER meteorological data",
+            },
+            "nws_forecast": {
+                "coverage": "usa",
+                "period": "today to today+5d",
+                "license": "Public Domain",
+                "description": "NOAA NWS forecast data (USA only)",
+            },
+            "nws_stations": {
+                "coverage": "usa",
+                "period": "today-1d to now",
+                "license": "Public Domain",
+                "description": "NOAA NWS station observations (USA only)",
+            },
+            "met_norway": {
+                "coverage": "global",
+                "period": "today to today+5d",
+                "license": "CC-BY-4.0",
+                "description": "MET Norway Locationforecast (global coverage)",
+            },
+        }
 
         return summary
 
@@ -429,25 +291,25 @@ class ClimateSourceSelector:
             "recommended_source": recommended,
             "all_sources": all_sources,
             "regional_coverage": {
-                "usa": cls._is_in_usa(lat, lon),
-                "nordic": cls._is_in_nordic(lat, lon),
+                "usa": GeographicUtils.is_in_usa(lat, lon),
+                "nordic": GeographicUtils.is_in_nordic(lat, lon),
             },
             "source_details": {
                 "nws_forecast": {
-                    "bbox": cls.USA_BBOX,
+                    "bbox": GeographicUtils.USA_BBOX,
                     "description": "USA: -125°W a -66°W, 24°N a 49°N",
                     "quality": "high",
                     "realtime": True,
                 },
                 "nws_stations": {
-                    "bbox": cls.USA_BBOX,
+                    "bbox": GeographicUtils.USA_BBOX,
                     "description": "USA stations: -125°W a -66°W, 24°N a 49°N",
                     "quality": "high",
                     "realtime": True,
                 },
                 "met_norway": {
                     "bbox": None,
-                    "nordic_bbox": cls.NORDIC_BBOX,
+                    "nordic_bbox": GeographicUtils.NORDIC_BBOX,
                     "description": (
                         "Global coverage. Nordic region "
                         "(NO/SE/FI/DK/Baltics): "
@@ -484,43 +346,6 @@ class ClimateSourceSelector:
         }
 
 
-# Exemplo de uso completo
-async def example_usage():
-    """Demonstra uso do seletor de fontes."""
-
-    # Exemplos de cidades em diferentes regiões
-    locations = [
-        {"name": "Paris, França", "lat": 48.8566, "lon": 2.3522},
-        {"name": "Nova York, USA", "lat": 40.7128, "lon": -74.0060},
-        {"name": "Brasília, Brasil", "lat": -15.7939, "lon": -47.8828},
-        {"name": "Tóquio, Japão", "lat": 35.6762, "lon": 139.6503},
-        {"name": "Oslo, Noruega", "lat": 59.9139, "lon": 10.7522},
-    ]
-
-    for loc in locations:
-        print(f"\n📍 {loc['name']} ({loc['lat']}, {loc['lon']})")
-
-        # 1. Seleção automática
-        source = ClimateSourceSelector.select_source(loc["lat"], loc["lon"])
-        print(f"   Fonte recomendada: {source}")
-
-        # 2. Todas as fontes disponíveis
-        all_sources = ClimateSourceSelector.get_all_sources(
-            loc["lat"], loc["lon"]
-        )
-        print(f"   Fontes disponíveis: {all_sources}")
-
-        # 3. Obter cliente
-        try:
-            client = ClimateSourceSelector.get_client(loc["lat"], loc["lon"])
-            print(f"   ✅ Cliente criado: {type(client).__name__}")
-        except Exception as e:
-            print(f"   ❌ Erro ao criar cliente: {e}")
-
-    # Cleanup global
-    await ClimateClientFactory.close_all()
-
-
 def get_available_sources_for_frontend(lat: float, lon: float) -> dict:
     """
     Retorna fontes disponíveis formatadas para o frontend.
@@ -539,7 +364,7 @@ def get_available_sources_for_frontend(lat: float, lon: float) -> dict:
                 {
                     "value": "fusion",
                     "label": "🔀 Fusão Inteligente (Recomendado)",
-                    "description": "Combina múltiplas fontes para melhor qualidade"
+                    "description": "Combina múltiplas fontes para melhor qualidade" # noqa: E501
                 },
                 {
                     "value": "openmeteo_forecast",
@@ -557,8 +382,8 @@ def get_available_sources_for_frontend(lat: float, lon: float) -> dict:
         }
     """
     # Detecta região
-    in_usa = ClimateSourceSelector._is_in_usa(lat, lon)
-    in_nordic = ClimateSourceSelector._is_in_nordic(lat, lon)
+    in_usa = GeographicUtils.is_in_usa(lat, lon)
+    in_nordic = GeographicUtils.is_in_nordic(lat, lon)
 
     region = (
         "USA Continental"
@@ -610,7 +435,7 @@ def get_available_sources_for_frontend(lat: float, lon: float) -> dict:
         {
             "value": "fusion",
             "label": "🔀 Fusão Inteligente (Recomendado)",
-            "description": f"Combina {len(all_sources)} fontes para melhor qualidade e cobertura",
+            "description": f"Combina {len(all_sources)} fontes para melhor qualidade e cobertura",  # noqa: E501
             "is_default": True,
         }
     ]
@@ -638,9 +463,3 @@ def get_available_sources_for_frontend(lat: float, lon: float) -> dict:
         },
         "total_sources": len(all_sources),
     }
-
-
-if __name__ == "__main__":
-    import asyncio
-
-    asyncio.run(example_usage())

@@ -140,6 +140,11 @@ class Visitor(Base):
         nullable=True,
         comment="SO: windows, macos, linux, android, ios",
     )
+    climate_region = Column(
+        String(50),
+        nullable=True,
+        comment="Região climática detectada: 'usa', 'nordic' ou 'global'",
+    )
 
     def __repr__(self) -> str:
         try:

@@ -1,14 +1,13 @@
 """
 Unit tests for climate data services to verify data return functionality.
 
-Tests all 7 climate data sources:
+Tests 6 climate data sources:
 1. Open-Meteo Forecast
 2. Open-Meteo Archive
 3. NASA POWER
 4. NWS Forecast
 5. NWS Stations
 6. MET Norway Locationforecast
-7. MET Norway FROST
 
 Enhanced features:
 - Global location testing
@@ -18,19 +17,24 @@ Enhanced features:
 """
 
 import asyncio
-import os
 from datetime import datetime, timedelta
 from typing import List, Tuple
 
 import pytest
 
-from backend.api.services.met_norway_client import (
-    METNorwayLocationForecastClient,
+from backend.api.services.met_norway.met_norway_client import (
+    METNorwayClient,
 )
-from backend.api.services.met_norway_frost_sync_adapter import FrostClient
-from backend.api.services.nasa_power_client import NASAPowerClient
-from backend.api.services.nws_forecast_client import NWSClient
-from backend.api.services.openmeteo_forecast_client import (
+from backend.api.services.nasa_power.nasa_power_client import (
+    NASAPowerClient,
+)
+from backend.api.services.nws_forecast.nws_forecast_client import (
+    NWSForecastClient,
+)
+from backend.api.services.nws_stations.nws_stations_client import (
+    NWSStationsClient,
+)
+from backend.api.services.openmeteo_forecast.openmeteo_forecast_client import (
     OpenMeteoForecastClient,
 )
 
@@ -159,9 +163,7 @@ class DataSourceInfo:
         "nws_forecast": datetime.now() - timedelta(days=7),  # Forecast only
         "nws_stations": datetime.now()
         - timedelta(days=30),  # Recent observations
-        "met_norway": datetime.now()
-        - timedelta(days=14),  # Forecast only
-        "met_norway_frost": datetime(1937, 1, 1),  # Historical observations
+        "met_norway": datetime.now() - timedelta(days=14),  # Forecast only
     }
 
     # Maximum historical reach for each source (from today backwards)
@@ -176,9 +178,6 @@ class DataSourceInfo:
         "nws_forecast": 7,  # Forecast only
         "nws_stations": 30,  # Recent observations
         "met_norway": 14,  # Forecast only
-        "met_norway_frost": (
-            datetime.now() - datetime(1937, 1, 1)
-        ).days,  # ~32,000+ days
     }
 
     # Coverage areas
@@ -189,7 +188,6 @@ class DataSourceInfo:
         "nws_forecast": "USA Continental",
         "nws_stations": "USA Continental",
         "met_norway": "Europe",
-        "met_norway_frost": "Norway (stations)",
     }
 
     @classmethod
@@ -228,7 +226,6 @@ class DataSourceInfo:
         # MET Norway for Europe
         if -25 <= lon <= 45 and 35 <= lat <= 72:
             sources.append("met_norway")
-            sources.append("met_norway_frost")
 
         # NWS for USA
         if -125 <= lon <= -66 and 24 <= lat <= 49:
@@ -304,8 +301,16 @@ async def nasa_client():
 
 @pytest.fixture
 async def nws_client():
-    """Fixture for NWS client."""
-    client = NWSClient()
+    """Fixture for NWS Forecast client."""
+    client = NWSForecastClient()
+    yield client
+    await client.close()
+
+
+@pytest.fixture
+async def nws_stations_client():
+    """Fixture for NWS Stations client."""
+    client = NWSStationsClient()
     yield client
     await client.close()
 
@@ -313,21 +318,9 @@ async def nws_client():
 @pytest.fixture
 async def met_norway_client():
     """Fixture for MET Norway Locationforecast client."""
-    client = METNorwayLocationForecastClient()
+    client = METNorwayClient()
     yield client
     await client.close()
-
-
-@pytest.fixture
-def frost_client():
-    """Fixture for MET Norway FROST client."""
-    client_id = os.getenv("FROST_CLIENT_ID")
-    client_secret = os.getenv("FROST_CLIENT_SECRET")
-    if client_id and client_secret:
-        client = FrostClient(client_id=client_id, client_secret=client_secret)
-        yield client
-    else:
-        yield None
 
 
 class TestClimateServices:
@@ -337,7 +330,7 @@ class TestClimateServices:
         """Test Open-Meteo Forecast API returns data."""
         lat, lon = -15.7939, -47.8828
         start_date = datetime.now()
-        end_date = start_date + timedelta(days=7)
+        end_date = start_date + timedelta(days=5)  # Max 5 days forecast
 
         data = await openmeteo_client.get_climate_data(
             lat=lat,
@@ -394,12 +387,8 @@ class TestClimateServices:
     async def test_nws_forecast(self, nws_client):
         """Test NWS Forecast API returns data."""
         lat, lon = 38.8977, -77.0365  # Washington DC
-        start_date = datetime.now()
-        end_date = start_date + timedelta(days=3)
 
-        data = await nws_client.get_forecast_data(
-            lat=lat, lon=lon, start_date=start_date, end_date=end_date
-        )
+        data = await nws_client.get_forecast_data(lat=lat, lon=lon)
 
         assert isinstance(data, list)
         assert len(data) > 0
@@ -407,12 +396,12 @@ class TestClimateServices:
         print(f"✅ NWS Forecast: {len(data)} records")
 
     @pytest.mark.asyncio
-    async def test_nws_stations(self, nws_client):
+    async def test_nws_stations(self, nws_stations_client):
         """Test NWS Stations API returns data."""
         lat, lon = 38.8977, -77.0365  # Washington DC
 
-        stations = await nws_client.get_nearby_stations(
-            lat=lat, lon=lon, max_distance_km=50.0, limit=5
+        stations = await nws_stations_client.find_nearest_stations(
+            lat=lat, lon=lon, limit=5
         )
 
         assert isinstance(stations, list)
@@ -439,28 +428,6 @@ class TestClimateServices:
         assert len(data) > 0
         assert hasattr(data[0], "date")
         print(f"✅ MET Norway Locationforecast: {len(data)} records")
-
-    def test_met_norway_frost(self, frost_client):
-        """Test MET Norway FROST API returns data."""
-        if frost_client is None:
-            pytest.skip("FROST credentials not available")
-
-        station_id = "SN18700"  # Oslo, Norway
-        end_date = datetime.now() - timedelta(days=1)
-        start_date = end_date - timedelta(days=7)
-
-        df = frost_client.get_daily_data(
-            latitude=59.9139,
-            longitude=10.7522,
-            start_date=start_date,
-            end_date=end_date,
-            source_id=station_id,
-        )
-
-        assert not df.empty
-        assert "date" in df.columns
-        assert "temp_mean" in df.columns
-        print(f"✅ MET Norway FROST: {len(df)} records")
 
 
 class TestGlobalLocations:
@@ -581,7 +548,8 @@ class TestDateRangeValidation:
 
         # Test NWS
         try:
-            info = NWSClient.get_data_availability_info()
+            nws_client = NWSForecastClient()
+            info = nws_client.get_data_availability_info()
             print("   NWS:")
             print(f"     Start: {info['data_start_date']}")
             print(f"     Forecast Days: {info['forecast_horizon_days']}")
@@ -592,7 +560,7 @@ class TestDateRangeValidation:
 
         # Test MET Norway Locationforecast
         try:
-            info = METNorwayLocationForecastClient.get_data_availability_info()
+            info = METNorwayClient.get_data_availability_info()
             print("   MET Norway Locationforecast:")
             print(f"     Start: {info['data_start_date']}")
             print(f"     Forecast Days: {info['forecast_horizon_days']}")
@@ -600,17 +568,6 @@ class TestDateRangeValidation:
             print()
         except Exception as e:
             print(f"   ❌ MET Norway Locationforecast info failed: {e}")
-
-        # Test MET Norway FROST
-        try:
-            info = FrostClient.get_data_availability_info()
-            print("   MET Norway FROST:")
-            print(f"     Start: {info['data_start_date']}")
-            print(f"     Years: {info['max_historical_years']}")
-            print(f"     Coverage: {info['coverage']}")
-            print()
-        except Exception as e:
-            print(f"   ❌ MET Norway FROST info failed: {e}")
 
     @pytest.mark.asyncio
     async def test_date_range_limits(self, openmeteo_client, nasa_client):
@@ -724,37 +681,24 @@ async def run_manual_tests():
 
     # Test NWS
     try:
-        nws_client = NWSClient()
+        nws_client = NWSForecastClient()
+        nws_stations_client = NWSStationsClient()
         await test_instance.test_nws_forecast(nws_client)
-        await test_instance.test_nws_stations(nws_client)
+        await test_instance.test_nws_stations(nws_stations_client)
         await nws_client.close()
+        await nws_stations_client.close()
         print("✅ NWS tests passed")
     except Exception as e:
         print(f"❌ NWS tests failed: {e}")
 
     # Test MET Norway Locationforecast
     try:
-        met_client = METNorwayLocationForecastClient()
+        met_client = METNorwayClient()
         await test_instance.test_met_norway(met_client)
         await met_client.close()
         print("✅ MET Norway Locationforecast tests passed")
     except Exception as e:
         print(f"❌ MET Norway Locationforecast tests failed: {e}")
-
-    # Test MET Norway FROST
-    try:
-        client_id = os.getenv("FROST_CLIENT_ID")
-        client_secret = os.getenv("FROST_CLIENT_SECRET")
-        if client_id and client_secret:
-            frost_client = FrostClient(
-                client_id=client_id, client_secret=client_secret
-            )
-            test_instance.test_met_norway_frost(frost_client)
-            print("✅ MET Norway FROST tests passed")
-        else:
-            print("⚠️ MET Norway FROST credentials not available")
-    except Exception as e:
-        print(f"❌ MET Norway FROST tests failed: {e}")
 
     print("\n🌍 Testing Global Location Coverage:")
     print("-" * 40)

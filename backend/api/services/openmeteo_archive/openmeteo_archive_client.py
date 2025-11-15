@@ -38,6 +38,8 @@ import requests_cache
 from loguru import logger
 from retry_requests import retry
 
+from backend.api.services.geographic_utils import GeographicUtils
+
 
 class OpenMeteoArchiveConfig:
     """Configuration for Open-Meteo Archive API."""
@@ -45,9 +47,11 @@ class OpenMeteoArchiveConfig:
     # API URL
     BASE_URL = "https://archive-api.open-meteo.com/v1/archive"
 
-    # Timeline constraints
-    MIN_DATE = datetime(1940, 1, 1)  # Archive starts here
-    MAX_DATE_OFFSET = 2  # Archive has data until TODAY - 2 days
+    # IMPORTANT: Timeline constraints (MIN_DATE, MAX_DATE_OFFSET)
+    # are defined in climate_source_availability.py (SOURCE OF TRUTH).
+    # This client ASSUMES pre-validated dates from climate_validation.py.
+    # - MIN_DATE: 1940-01-01 (in climate_source_availability.py)
+    # - MAX_DATE: hoje - 2d (in climate_source_availability.py)
 
     # Cache TTL (dados históricos são estáveis)
     CACHE_TTL = 86400  # 24 hours (pode ter correções)
@@ -119,6 +123,12 @@ class OpenMeteoArchiveClient:
     ) -> Dict[str, Any]:
         """
         Get historical climate data from Archive API.
+
+        IMPORTANTE: Este cliente ASSUME que:
+        - Coordenadas validadas em climate_validation.py
+        - Period (1940-01-01 até hoje-2d) validado em
+          climate_source_availability.py
+        Este cliente APENAS busca dados, sem re-validar datas.
 
         Uses Redis cache if available, with TTL 24h
         (dados históricos estáveis).
@@ -288,15 +298,15 @@ class OpenMeteoArchiveClient:
         """
         Validate coordinate and date range inputs.
 
+        IMPORTANTE: Validação básica de coordenadas e datas.
+        Validações de período (7-30 dias) são feitas em climate_validation.py.
+
         Raises:
             ValueError: Invalid inputs
         """
-        # Coordinates
-        if not -90 <= lat <= 90:
-            msg = f"Invalid latitude: {lat}. Must be -90 to 90"
-            raise ValueError(msg)
-        if not -180 <= lng <= 180:
-            msg = f"Invalid longitude: {lng}. Must be -180 to 180"
+        # Coordinates - usar GeographicUtils (SINGLE SOURCE OF TRUTH)
+        if not GeographicUtils.is_valid_coordinate(lat, lng):
+            msg = f"Invalid coordinates: ({lat}, {lng})"
             raise ValueError(msg)
 
         # Date format

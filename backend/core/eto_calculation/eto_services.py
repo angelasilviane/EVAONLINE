@@ -17,12 +17,19 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from pandas import Timestamp
 from loguru import logger
 
 from backend.core.data_processing.data_download import download_weather_data
 from backend.core.data_processing.data_preprocessing import preprocessing
 from backend.core.data_processing.kalman_ensemble import KalmanEnsembleStrategy
 from backend.core.data_processing.station_finder import StationFinder
+from backend.api.services.opentopo import OpenTopoClient
+from backend.api.services.weather_utils import (
+    ElevationUtils,
+    WeatherValidationUtils,
+)
+from backend.api.services.geographic_utils import GeographicUtils
 from config.logging_config import log_execution_time
 
 
@@ -92,27 +99,53 @@ class EToCalculationService:
                 f"Variáveis obrigatórias ausentes: {', '.join(missing_vars)}"
             )
 
-        # Validar ranges razoáveis (apenas se variável existe)
-        if not (-90 <= measurements["latitude"] <= 90):
-            raise ValueError("Latitude deve estar entre -90 e 90")
-        if not (-180 <= measurements["longitude"] <= 180):
-            raise ValueError("Longitude deve estar entre -180 e 180")
-        if (
-            measurements["elevation_m"] < -500
-            or measurements["elevation_m"] > 9000
+        # Validar ranges usando utilitários centralizados
+        lat = measurements["latitude"]
+        lon = measurements["longitude"]
+
+        # Validar coordenadas
+        if not GeographicUtils.is_valid_coordinate(lat, lon):
+            raise ValueError(f"Coordenadas inválidas: lat={lat}, lon={lon}")
+
+        # Validar elevação
+        elevation = measurements["elevation_m"]
+        if elevation < -500 or elevation > 9000:
+            raise ValueError(
+                f"Elevação {elevation}m fora do range válido (-500 a 9000m)"
+            )
+
+        # Validar variáveis meteorológicas
+        if not WeatherValidationUtils.is_valid_temperature(
+            measurements["T2M_MAX"]
         ):
-            raise ValueError("Elevação deve estar entre -500 e 9000 metros")
-        if not (0 <= measurements["RH2M"] <= 100):
-            raise ValueError("Umidade relativa deve estar entre 0 e 100%")
-        if measurements["WS2M"] < 0:
-            raise ValueError("Velocidade do vento não pode ser negativa")
+            raise ValueError(f"T2M_MAX inválida: {measurements['T2M_MAX']}°C")
+        if not WeatherValidationUtils.is_valid_temperature(
+            measurements["T2M_MIN"]
+        ):
+            raise ValueError(f"T2M_MIN inválida: {measurements['T2M_MIN']}°C")
+        if not WeatherValidationUtils.is_valid_humidity(measurements["RH2M"]):
+            raise ValueError(
+                f"Umidade relativa inválida: {measurements['RH2M']}%"
+            )
+        if not WeatherValidationUtils.is_valid_wind_speed(
+            measurements["WS2M"]
+        ):
+            raise ValueError(
+                f"Velocidade do vento inválida: {measurements['WS2M']} m/s"
+            )
         if measurements["T2M_MAX"] < measurements["T2M_MIN"]:
-            raise ValueError("T2M_MAX não pode ser menor que T2M_MIN")
+            raise ValueError(
+                f"T2M_MAX ({measurements['T2M_MAX']}°C) < "
+                f"T2M_MIN ({measurements['T2M_MIN']}°C)"
+            )
 
         return True
 
     def calculate_et0(
-        self, measurements: Dict[str, float], method: str = "pm"
+        self,
+        measurements: Dict[str, float],
+        method: str = "pm",
+        elevation_factors: Optional[Dict[str, float]] = None,
     ) -> Dict[str, Any]:
         """
         Calcula ET0 diária usando FAO-56 Penman-Monteith.
@@ -146,19 +179,6 @@ class EToCalculationService:
                     'gamma': float        # Constante psicrométrica
                 }
             }
-
-        Example:
-            >>> measurements = {
-            ...     'T2M_MAX': 28.5, 'T2M_MIN': 18.2, 'T2M_MEAN': 23.4,
-            ...     'RH2M': 65.0, 'WS2M': 2.5, 'PRECTOTCORR': 5.2,
-            ...     'ALLSKY_SFC_SW_DWN': 22.5, 'PS': 101.3,
-            ...     'latitude': -15.7975, 'longitude': -48.0,
-            ...     'date': '2024-09-15', 'elevation_m': 1000
-            ... }
-            >>> service = EToCalculationService()
-            >>> result = service.calculate_et0(measurements)
-            >>> print(f"ET0: {result['et0_mm_day']} mm/dia")
-            ET0: 4.5 mm/dia
         """
         try:
             # 1. Validação
@@ -173,10 +193,14 @@ class EToCalculationService:
             Rs = measurements["ALLSKY_SFC_SW_DWN"]  # MJ/m²/dia
             z = measurements["elevation_m"]
             lat = measurements["latitude"]
-            date_str = measurements["date"]
+            date_str: str = str(measurements["date"])
 
-            # Calcular pressão atmosférica pela elevação (FAO-56 Eq. 7)
-            P = 101.3 * ((293 - 0.0065 * z) / 293) ** 5.26
+            # Usar fatores de elevação pré-calculados ou calcular
+            if elevation_factors:
+                P = elevation_factors.get("pressure", 101.3)
+            else:
+                # Usar utilitário centralizado (FAO-56 Eq. 7)
+                P = ElevationUtils.calculate_atmospheric_pressure(z)
 
             # 3. Cálculos intermediários FAO-56
 
@@ -211,7 +235,11 @@ class EToCalculationService:
             slope = self._vapor_pressure_slope(T_mean)
 
             # 3i. Constante psicrométrica (γ)
-            gamma = self._psychrometric_constant(P, z)
+            if elevation_factors:
+                gamma = elevation_factors.get("gamma", 0.665e-3 * P)
+            else:
+                # Usar utilitário centralizado (FAO-56 Eq. 8)
+                gamma = ElevationUtils.calculate_psychrometric_constant(z)
 
             # 4. Penman-Monteith (FAO-56 Eq. 6)
             Cn = 900  # Coeficiente para ETo
@@ -283,19 +311,6 @@ class EToCalculationService:
         """
         exp_term = (17.27 * T) / (T + 237.3)
         return (4098 * 0.6108 * math.exp(exp_term)) / ((T + 237.3) ** 2)
-
-    def _psychrometric_constant(self, P: float, z: float) -> float:
-        """
-        Constante psicrométrica (FAO-56 Eq. 35).
-
-        Args:
-            P: Pressão atmosférica em kPa
-            z: Elevação em metros
-
-        Returns:
-            Constante psicrométrica em kPa/°C
-        """
-        return 0.000665 * P / 2.45
 
     def _solar_declination(self, N: int) -> float:
         """
@@ -452,23 +467,41 @@ class EToProcessingService:
         elevation: Optional[float] = None,
         include_recomendations: bool = True,
         database: str = "nasa_power",
+        use_precise_elevation: bool = True,
     ) -> Dict[str, Any]:
         """
-        Processa localidade completa: download → preprocessing → fusion → eto.
+        Processa localidade completa: download → elevação → fusion → ETo.
+
+        NEW: Integração com OpenTopoData para elevação precisa (1m de
+        resolução) vs Open-Meteo (~7-30m).
 
         Args:
             latitude: Latitude (-90 a 90)
             longitude: Longitude (-180 a 180)
             start_date: Data inicial (YYYY-MM-DD)
             end_date: Data final (YYYY-MM-DD)
-            elevation: Elevação em metros (opcional)
+            elevation: Elevação em metros (opcional, será obtida de
+                       OpenTopoData se não fornecida)
             include_recomendations: Se deve gerar recomendações
             database: Base de dados ('nasa_power' ou outro)
+            use_precise_elevation: Se True, tenta OpenTopoData (default: True)
 
         Returns:
             Dict com resultado completo:
             {
                 'location': {'lat': float, 'lon': float},
+                'elevation': {
+                    'value': float,
+                    'source': 'opentopo' | 'openmeteo' | 'input',
+                    'openmeteo': float (if available),
+                    'opentopo': float (if available),
+                    'difference_m': float,
+                },
+                'elevation_factors': {
+                    'pressure': float,
+                    'gamma': float,
+                    'solar_factor': float,
+                },
                 'period': {'start': str, 'end': str},
                 'et0_series': [
                     {
@@ -479,29 +512,38 @@ class EToProcessingService:
                     },
                     ...
                 ],
-                'summary': {
-                    'total_days': 30,
-                    'et0_total_mm': 135.2,
-                    'et0_mean_mm_day': 4.5,
-                    'et0_max_mm_day': 5.2,
-                    'et0_min_mm_day': 3.8,
-                    'anomaly_count': 2
-                },
+                'summary': {...},
                 'recomendations': [...]  # If include_recomendations=True
             }
-
-        Example:
-            >>> service = EToProcessingService(db_session, redis_client)
-            >>> result = await service.process_location(
-            ...     latitude=-15.7975,
-            ...     longitude=-48.0,
-            ...     start_date='2024-09-01',
-            ...     end_date='2024-09-30'
-            ... )
-            >>> print(f"ETo médio: {result['summary']['et0_mean_mm_day']} mm/dia")
         """
+        topo_client = None
+
         try:
-            # 1. Download
+            # ═══════════════════════════════════════════════════════════
+            # ESTRATÉGIA DE ELEVAÇÃO OTIMIZADA (Nov 2025)
+            # ═══════════════════════════════════════════════════════════
+            # PRIORIDADE DE ELEVAÇÃO:
+            # 1. Input do usuário (se fornecido)
+            # 2. OpenTopo (~1m) - Máxima precisão
+            # 3. Open-Meteo Archive/Forecast (~7-30m) - Fallback
+            # 4. Default (0m) - Último recurso
+            #
+            # ESTRATÉGIA DE REQUISIÇÕES (economiza limite diário):
+            # - Baixar dados climáticos PRIMEIRO (Open-Meteo grátis)
+            # - Tentar OpenTopo (se user não deu input)
+            # - Se OpenTopo falhar, usar elevation do Open-Meteo
+            # ═══════════════════════════════════════════════════════════
+
+            elevation_archive = None  # Open-Meteo Archive elevation
+            elevation_forecast = None  # Open-Meteo Forecast elevation
+            elevation_opentopo = None  # OpenTopo elevation
+            final_elevation = None
+            elevation_source = None
+
+            # 1️⃣ BAIXAR DADOS CLIMÁTICOS PRIMEIRO
+            # (Open-Meteo já retorna elevation sem custo extra)
+            logger.info("📊 Etapa 1: Baixar dados climáticos")
+
             weather_data, download_warnings = download_weather_data(
                 database, start_date, end_date, longitude, latitude
             )
@@ -509,21 +551,156 @@ class EToProcessingService:
             if weather_data is None or weather_data.empty:
                 raise ValueError("Falha ao obter dados meteorológicos")
 
-            # 2. Preprocessing
+            # Extrair elevação do Open-Meteo (Archive ou Forecast)
+            if hasattr(weather_data, "attrs"):
+                elevation_meteo = weather_data.attrs.get("elevation")
+
+                # Identificar fonte específica (archive vs forecast)
+                if "archive" in database.lower():
+                    elevation_archive = elevation_meteo
+                    if elevation_archive:
+                        logger.info(
+                            f"   ✅ Open-Meteo Archive elevation: "
+                            f"{elevation_archive:.1f}m (fallback disponível)"
+                        )
+                elif "forecast" in database.lower() or database == "openmeteo":
+                    elevation_forecast = elevation_meteo
+                    if elevation_forecast:
+                        logger.info(
+                            f"   ✅ Open-Meteo Forecast elevation: "
+                            f"{elevation_forecast:.1f}m (fallback disponível)"
+                        )
+
+            # 2️⃣ OBTER ELEVAÇÃO PRECISA (OpenTopo)
+            # Só tenta se user não forneceu input
+            logger.info("🗻 Etapa 2: Obter elevação precisa")
+
+            if elevation is None and use_precise_elevation:
+                logger.info(
+                    "   🎯 Tentando OpenTopo para máxima precisão (~1m)..."
+                )
+                try:
+                    topo_client = OpenTopoClient()
+                    topo_location = await topo_client.get_elevation(
+                        latitude, longitude
+                    )
+
+                    if topo_location:
+                        elevation_opentopo = topo_location.elevation
+                        logger.info(
+                            f"   ✅ OpenTopo: {elevation_opentopo:.1f}m "
+                            f"({topo_location.dataset}, precisão: ~1m)"
+                        )
+                    else:
+                        logger.warning("   ⚠️  OpenTopo retornou None")
+
+                except Exception as e:
+                    logger.warning(
+                        f"   ⚠️  OpenTopo falhou: {e} "
+                        f"(usando fallback Open-Meteo)"
+                    )
+
+            # 3️⃣ DECISÃO DE ELEVAÇÃO (Cascata de Fallback)
+            logger.info("🔧 Etapa 3: Determinar elevação final")
+
+            # Prioridade 1: Input do usuário
+            if elevation is not None:
+                final_elevation = elevation
+                elevation_source = "input"
+                logger.info(
+                    f"   📍 Usando elevação do INPUT: {final_elevation:.1f}m"
+                )
+
+            # Prioridade 2: OpenTopo (~1m) - Máxima precisão
+            elif elevation_opentopo is not None:
+                final_elevation = elevation_opentopo
+                elevation_source = "opentopo"
+                logger.info(
+                    f"   🎯 Usando elevação OPENTOPO: "
+                    f"{final_elevation:.1f}m (precisão: ~1m)"
+                )
+
+            # Prioridade 3: Open-Meteo Archive (~7-30m) - Fallback
+            elif elevation_archive is not None:
+                final_elevation = elevation_archive
+                elevation_source = "openmeteo_archive"
+                logger.info(
+                    f"   🌐 Usando elevação OPEN-METEO ARCHIVE (fallback): "
+                    f"{final_elevation:.1f}m (precisão: ~7-30m)"
+                )
+
+            # Prioridade 4: Open-Meteo Forecast (~7-30m) - Fallback
+            elif elevation_forecast is not None:
+                final_elevation = elevation_forecast
+                elevation_source = "openmeteo_forecast"
+                logger.info(
+                    f"   🌐 Usando elevação OPEN-METEO FORECAST (fallback): "
+                    f"{final_elevation:.1f}m (precisão: ~7-30m)"
+                )
+
+            # Prioridade 5: Default (0m - nível do mar)
+            else:
+                final_elevation = 0.0
+                elevation_source = "default"
+                logger.warning(
+                    "   ⚠️ Nenhuma elevação disponível - "
+                    "assumindo nível do mar (0m)"
+                )
+
+            # Análise de impacto (se múltiplas fontes disponíveis)
+            if elevation_opentopo and (
+                elevation_archive or elevation_forecast
+            ):
+                elevation_meteo_best = (
+                    elevation_archive
+                    if elevation_archive
+                    else elevation_forecast
+                )
+                impact = ElevationUtils.compare_elevation_impact(
+                    elevation_opentopo, elevation_meteo_best
+                )
+                logger.info(
+                    f"   💡 Diferença OpenTopo vs Open-Meteo: "
+                    f"{impact['elevation_diff_m']:.1f}m | "
+                    f"Impacto ETo: {impact['eto_impact_pct']:.3f}% "
+                    f"({impact['recommendation']})"
+                )
+
+            # 4️⃣ CALCULAR FATORES DE CORREÇÃO POR ELEVAÇÃO
+            logger.info("⚙️ Etapa 4: Calcular fatores de correção de elevação")
+
+            elevation_factors = ElevationUtils.get_elevation_correction_factor(
+                final_elevation
+            )
+
+            logger.info(f"   Pressão: {elevation_factors['pressure']:.2f} kPa")
+            logger.info(
+                f"   Gamma (γ): {elevation_factors['gamma']:.5f} kPa/°C"
+            )
+            logger.info(
+                f"   Solar factor: {elevation_factors['solar_factor']:.4f}"
+            )
+
+            # 5️⃣ PRÉ-PROCESSAMENTO
+            logger.info("📈 Etapa 5: Pré-processamento de dados")
+
             weather_data, preprocessing_warnings = preprocessing(
                 weather_data, latitude
             )
 
-            # Adicionar elevation ao DataFrame antes da fusão
-            if elevation:
-                weather_data["elevation_m"] = elevation
+            # Adicionar elevação ao DataFrame
+            weather_data["elevation_m"] = final_elevation
 
-            # 3. Fusion (Kalman com histórico)
+            # 6️⃣ FUSÃO (Kalman com histórico)
+            logger.info("🔀 Etapa 6: Fusão de dados (Kalman Ensemble)")
+
             weather_data_fused, fusion_warnings = await self._fuse_data(
                 weather_data, latitude, longitude
             )
 
-            # 4. ETo Cálculo para cada dia
+            # 7️⃣ CÁLCULO DE ETo PARA CADA DIA
+            logger.info("✅ Etapa 7: Calcular ETo (FAO-56)")
+
             et0_series = []
             raw_data_list = []  # Para salvar no banco
 
@@ -531,20 +708,29 @@ class EToProcessingService:
                 measurements = row.to_dict()
                 measurements["latitude"] = latitude
                 measurements["longitude"] = longitude
-                measurements["date"] = str(idx.date())
+                # Converter idx para string de data
+                if isinstance(idx, Timestamp):
+                    date_str_val = str(idx.date())
+                else:
+                    date_str_val = str(idx)[:10]
+                measurements["date"] = date_str_val
 
-                et0_result = self.et0_calc.calculate_et0(measurements)
+                # Usar elevação e fatores pré-calculados
+                et0_result = self.et0_calc.calculate_et0(
+                    measurements,
+                    elevation_factors=elevation_factors,
+                )
 
                 # 5. Detecção anomalia (com histórico)
                 historical = await self._get_historical_et0_normal(
-                    latitude, longitude, str(idx.date())
+                    latitude, longitude, date_str_val
                 )
                 anomaly = self.et0_calc.detect_anomalies(
                     et0_result["et0_mm_day"], historical
                 )
 
                 et0_data = {
-                    "date": str(idx.date()),
+                    "date": date_str_val,
                     "et0_mm_day": et0_result["et0_mm_day"],
                     "quality": et0_result["quality"],
                     "anomaly": anomaly,
@@ -560,34 +746,65 @@ class EToProcessingService:
                     }
                 )
 
-            # 6. ✅ NOVO: Salvar dados no banco PostgreSQL
+            # 8️⃣ SALVAR NO BANCO PostgreSQL
+            logger.info("💾 Etapa 8: Salvar dados no banco")
+
             if self.db_session and et0_series:
                 await self._save_to_database(
                     latitude=latitude,
                     longitude=longitude,
-                    elevation=elevation,
+                    elevation=final_elevation,
+                    elevation_source=elevation_source,
+                    elevation_opentopo=elevation_opentopo,
+                    elevation_archive=elevation_archive,
+                    elevation_forecast=elevation_forecast,
                     source_api=database,
                     raw_data_list=raw_data_list,
                 )
 
-            # 7. Recomendações (agrícolas)
+            # 9️⃣ RECOMENDAÇÕES (agrícolas)
+            logger.info("📋 Etapa 9: Gerar recomendações")
+
             recomendations = None
             if include_recomendations:
                 recomendations = self._generate_recomendations(et0_series)
 
+            logger.info("✅ Processamento completo!")
+
             return {
                 "location": {"lat": latitude, "lon": longitude},
+                "elevation": {
+                    "value": final_elevation,
+                    "source": elevation_source,
+                    "opentopo": elevation_opentopo,
+                    "archive": elevation_archive,
+                    "forecast": elevation_forecast,
+                    "difference_m": (
+                        abs(
+                            elevation_opentopo
+                            - (elevation_archive or elevation_forecast)
+                        )
+                        if elevation_opentopo
+                        and (elevation_archive or elevation_forecast)
+                        else None
+                    ),
+                },
+                "elevation_factors": elevation_factors,
                 "period": {"start": start_date, "end": end_date},
                 "et0_series": et0_series,
-                "eto_data": et0_series,  # Compatibilidade com formato antigo
+                "eto_data": et0_series,  # Compatibilidade com fmt antigo
                 "summary": self._summarize_series(et0_series),
-                "statistics": self._summarize_series(et0_series),  # Alias
+                "statistics": (self._summarize_series(et0_series)),  # Alias
                 "recomendations": recomendations,
             }
 
         except Exception as e:
-            self.logger.error(f"Erro ao processar localidade: {str(e)}")
+            self.logger.error(f"❌ Erro ao processar localidade: {str(e)}")
             return {"error": str(e)}
+
+        finally:
+            if topo_client:
+                await topo_client.close()
 
     async def _fuse_data(
         self, weather_data: pd.DataFrame, latitude: float, longitude: float
@@ -685,8 +902,12 @@ class EToProcessingService:
         latitude: float,
         longitude: float,
         elevation: Optional[float],
-        source_api: str,
-        raw_data_list: List[Dict[str, Any]],
+        elevation_source: Optional[str] = None,
+        elevation_opentopo: Optional[float] = None,
+        elevation_archive: Optional[float] = None,
+        elevation_forecast: Optional[float] = None,
+        source_api: str = "nasa_power",
+        raw_data_list: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         """
         Salva dados climáticos e ETo no banco PostgreSQL.
@@ -699,6 +920,9 @@ class EToProcessingService:
             raw_data_list: Lista com dados brutos e resultados
         """
         try:
+            if not raw_data_list:
+                return
+
             from backend.database.models.climate_data import ClimateData
             from datetime import datetime as dt
 
@@ -742,6 +966,12 @@ class EToProcessingService:
                             "quality": data_item["eto_result"]["quality"]
                         }
                         existing.elevation = elevation
+                        existing.elevation_metadata = {
+                            "source": elevation_source,
+                            "opentopo": elevation_opentopo,
+                            "archive": elevation_archive,
+                            "forecast": elevation_forecast,
+                        }
                         existing.updated_at = dt.utcnow()
                     else:
                         # Criar novo registro
@@ -767,6 +997,12 @@ class EToProcessingService:
                             eto_method=data_item["eto_result"]["method"],
                             quality_flags={
                                 "quality": data_item["eto_result"]["quality"]
+                            },
+                            elevation_metadata={
+                                "source": elevation_source,
+                                "opentopo": elevation_opentopo,
+                                "archive": elevation_archive,
+                                "forecast": elevation_forecast,
                             },
                             processing_metadata={
                                 "components": data_item["eto_result"].get(
@@ -984,9 +1220,12 @@ class EToProcessingService:
                     measurements = row.to_dict()
                     measurements["latitude"] = latitude
                     measurements["longitude"] = longitude
-                    measurements["date"] = (
-                        str(idx.date()) if hasattr(idx, "date") else str(idx)
-                    )
+                    # Converter idx para string de data
+                    if isinstance(idx, Timestamp):
+                        date_str_val = str(idx.date())
+                    else:
+                        date_str_val = str(idx)[:10]
+                    measurements["date"] = date_str_val
                     if elevation:
                         measurements["elevation_m"] = elevation
 
@@ -1013,7 +1252,12 @@ class EToProcessingService:
             if not et0_series:
                 raise ValueError("Falha no cálculo de ETo para todos os dias.")
 
-            # 6. Criar resultado no formato esperado pelo endpoint
+            # 6. Calcular métrica de irrigação
+            irrigation_mm = round(
+                sum(d["et0_mm_day"] for d in et0_series) * 1.1, 1
+            )
+
+            # 7. Criar resultado no formato esperado pelo endpoint
             result = {
                 "location": {"lat": latitude, "lon": longitude},
                 "period": {"start": start_date, "end": end_date},
@@ -1038,8 +1282,7 @@ class EToProcessingService:
                 },
                 "recomendations": [
                     (
-                        f"💧 Irrigação estimada: "
-                        f"{round(sum(d['et0_mm_day'] for d in et0_series) * 1.1, 1)} "
+                        f"💧 Irrigação estimada: {irrigation_mm} "
                         f"mm para o período"
                     ),
                     (

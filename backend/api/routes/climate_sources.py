@@ -4,8 +4,16 @@ Climate Sources Routes
 
 from typing import Any, Dict, Optional
 from fastapi import APIRouter, Query
+from loguru import logger
+
+from backend.api.services.climate_source_manager import ClimateSourceManager
+from backend.api.services.climate_source_selector import ClimateSourceSelector
 
 router = APIRouter(prefix="/climate/sources", tags=["Climate"])
+
+# Inicializar gerenciador e seletor globalmente
+_manager = ClimateSourceManager()
+_selector = ClimateSourceSelector()
 
 
 # ============================================================================
@@ -29,61 +37,81 @@ async def get_available_sources(
         Dict com fontes disponíveis (global + regional se lat/lon fornecidos)
     """
     try:
-        # Fontes globais (sempre disponíveis)
-        global_sources = [
-            {
-                "id": "openmeteo_archive",
-                "name": "Open-Meteo Archive",
-                "type": "global",
-                "coverage": "worldwide",
-                "data_types": ["temperature", "humidity", "wind", "radiation"],
-                "temporal_range": "1940-present",
-            },
-            {
-                "id": "nasa_power",
-                "name": "NASA POWER",
-                "type": "global",
-                "coverage": "worldwide",
-                "data_types": ["temperature", "humidity", "wind", "radiation"],
-                "temporal_range": "1981-present",
-            },
-        ]
+        # Se lat/lon não fornecidos, retornar todas as fontes
+        if lat is None or lon is None:
+            sources = []
+            for source_id, config in _manager.SOURCES_CONFIG.items():
+                sources.append(
+                    {
+                        "id": source_id,
+                        "name": config.get("name", source_id),
+                        "type": config.get("coverage", "unknown"),
+                        "coverage": config.get("coverage", "unknown"),
+                        "license": config.get("license", "unknown"),
+                        "temporal_range": config.get("temporal_range", ""),
+                        "data_types": config.get("variables", []),
+                        "realtime": config.get("realtime", False),
+                        "priority": config.get("priority", 0),
+                    }
+                )
 
-        result = {
-            "global_sources": global_sources,
-            "regional_sources": [],
-            "total_sources": len(global_sources),
+            return {
+                "status": "success",
+                "sources": sources,
+                "total_sources": len(sources),
+                "location": None,
+                "geographic_context": None,
+            }
+
+        # Com lat/lon: detectar região e retornar fontes compatíveis
+        is_usa = _manager.is_in_usa(lat, lon)
+        is_nordic = _manager.is_in_nordic(lat, lon)
+
+        geographic_context = "global"
+        if is_usa:
+            geographic_context = "usa"
+        elif is_nordic:
+            geographic_context = "nordic"
+
+        # Obter fontes disponíveis para localização
+        available = _selector.get_available_sources_for_frontend(lat, lon)
+
+        sources = []
+        for source_id in available:
+            if source_id in _manager.SOURCES_CONFIG:
+                config = _manager.SOURCES_CONFIG[source_id]
+                sources.append(
+                    {
+                        "id": source_id,
+                        "name": config.get("name", source_id),
+                        "type": config.get("coverage", "unknown"),
+                        "coverage": config.get("coverage", "unknown"),
+                        "license": config.get("license", "unknown"),
+                        "temporal_range": config.get("temporal_range", ""),
+                        "data_types": config.get("variables", []),
+                        "realtime": config.get("realtime", False),
+                        "priority": config.get("priority", 0),
+                    }
+                )
+
+        logger.info(
+            f"Available sources for ({lat}, {lon}) [{geographic_context}]: "
+            f"{[s['id'] for s in sources]}"
+        )
+
+        return {
+            "status": "success",
+            "sources": sources,
+            "total_sources": len(sources),
+            "location": {"lat": lat, "lon": lon},
+            "geographic_context": geographic_context,
         }
 
-        # Se lat/lon fornecidos, adicionar fontes regionais (Brasil)
-        if lat is not None and lon is not None:
-            # Verificar se está no Brasil (-34 a 5.27 lat, -73.99 a -28.84 lon)
-            if -34 <= lat <= 5.27 and -73.99 <= lon <= -28.84:
-                regional = [
-                    {
-                        "id": "inmet",
-                        "name": "INMET (Instituto Nacional de Meteorologia)",
-                        "type": "regional",
-                        "coverage": "Brazil",
-                        "data_types": [
-                            "temperature",
-                            "humidity",
-                            "wind",
-                            "radiation",
-                            "precipitation",
-                        ],
-                        "temporal_range": "2000-present",
-                    }
-                ]
-                result["regional_sources"] = regional
-                result["total_sources"] += len(regional)
-
-        return result
-
     except Exception as e:
+        logger.error(f"Error getting available sources: {e}")
         return {
+            "status": "error",
             "error": str(e),
-            "global_sources": [],
-            "regional_sources": [],
+            "sources": [],
             "total_sources": 0,
         }

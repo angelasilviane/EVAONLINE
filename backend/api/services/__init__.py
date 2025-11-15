@@ -102,13 +102,13 @@ def __getattr__(name: str):
             "OpenMeteoForecastSyncAdapter",
         ),
         # MET Norway LocationForecast
-        "METNorwayLocationForecastClient": (
+        "METNorwayClient": (
             ".met_norway.met_norway_client",
-            "METNorwayLocationForecastClient",
+            "METNorwayClient",
         ),
-        "METNorwayLocationForecastSyncAdapter": (
+        "METNorwaySyncAdapter": (
             ".met_norway.met_norway_sync_adapter",
-            "METNorwayLocationForecastSyncAdapter",
+            "METNorwaySyncAdapter",
         ),
         # NWS Forecast
         "NWSForecastClient": (
@@ -127,6 +127,20 @@ def __getattr__(name: str):
         "NWSStationsSyncAdapter": (
             ".nws_stations.nws_stations_sync_adapter",
             "NWSStationsSyncAdapter",
+        ),
+        # OpenTopoData
+        "OpenTopoClient": (
+            ".opentopo.opentopo_client",
+            "OpenTopoClient",
+        ),
+        # Weather Utils
+        "WeatherConversionUtils": (
+            ".weather_utils",
+            "WeatherConversionUtils",
+        ),
+        "ElevationUtils": (
+            ".weather_utils",
+            "ElevationUtils",
         ),
     }
 

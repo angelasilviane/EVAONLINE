@@ -2,7 +2,7 @@ import asyncio
 from datetime import datetime, timedelta
 
 from backend.api.services.met_norway_client import (
-    METNorwayLocationForecastClient,
+    METNorwayClient,
 )
 from backend.api.services.nws_forecast_client import NWSClient
 from backend.api.services.openmeteo_forecast_client import (
@@ -77,7 +77,7 @@ async def test_forecast_limits():
     # Test MET Norway Locationforecast Limits (max 14 days future)
     print("\n🇳🇴 MET Norway Locationforecast (máximo: +14 dias):")
 
-    met_client = METNorwayLocationForecastClient()
+    met_client = METNorwayClient()
 
     # Test within limits (+10 days future)
     try:

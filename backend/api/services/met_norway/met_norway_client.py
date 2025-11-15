@@ -39,6 +39,14 @@ from typing import Any
 import httpx
 import numpy as np
 from loguru import logger
+
+# Import para detecção regional (fonte única)
+from backend.api.services.geographic_utils import (
+    GeographicUtils,
+    TimezoneUtils,
+    validate_coordinates,
+)
+from backend.api.services.weather_utils import WeatherConversionUtils
 from pydantic import BaseModel, Field
 
 
@@ -89,7 +97,9 @@ class METNorwayDailyData(BaseModel):
     )
     humidity_mean: float | None = Field(
         None,
-        description="Mean relative humidity (%) - from hourly relative_humidity",
+        description=(
+            "Mean relative humidity (%) - from hourly relative_humidity"
+        ),
     )
     precipitation_sum: float | None = Field(
         None,
@@ -97,7 +107,9 @@ class METNorwayDailyData(BaseModel):
     )
     wind_speed_2m_mean: float | None = Field(
         None,
-        description="Mean wind speed at 2m (m/s) - converted from 10m using FAO-56",
+        description=(
+            "Mean wind speed at 2m (m/s) - converted from 10m using FAO-56"
+        ),
     )
     source: str = Field(default="met_norway", description="Data source")
 
@@ -127,15 +139,6 @@ class METNorwayClient:
     - Rest of World: Temperature and humidity only (9km ECMWF base)
       Precipitation has lower quality without post-processing
     """
-
-    # Nordic region bounding box (MET Nordic 1km dataset coverage)
-    # Norway, Denmark, Sweden, Finland, Baltic countries
-    NORDIC_BBOX = {
-        "lon_min": 4.0,  # West Denmark
-        "lon_max": 31.0,  # East Finland/Baltics
-        "lat_min": 54.0,  # South Denmark
-        "lat_max": 71.5,  # North Norway
-    }
 
     # Daily variables available from MET Norway
     # Note: Solar radiation NOT available - use other APIs
@@ -202,39 +205,6 @@ class METNorwayClient:
         await self.client.aclose()
 
     @staticmethod
-    def convert_wind_10m_to_2m(wind_10m: float | None) -> float | None:
-        """
-        Convert wind speed from 10m height to 2m height using FAO-56 formula.
-
-        The FAO-56 Penman-Monteith equation requires wind speed at 2m height.
-        MET Norway reports wind at 10m (standard meteorological height).
-
-        Formula (FAO-56 Irrigation and Drainage Paper 56, Eq. 47):
-            u2 = uz × [4.87 / ln(67.8 × z - 5.42)]
-
-        For z=10m:
-            u2 = u10 × [4.87 / ln(67.8 × 10 - 5.42)]
-            u2 = u10 × [4.87 / ln(672.58)]
-            u2 = u10 × [4.87 / 6.511]
-            u2 = u10 × 0.748
-
-        Args:
-            wind_10m: Wind speed at 10m height (m/s), or None if missing
-
-        Returns:
-            Wind speed at 2m height (m/s), or None if input is None
-
-        Reference:
-            Allen, R.G., Pereira, L.S., Raes, D., Smith, M., 1998.
-            Crop evapotranspiration - Guidelines for computing crop water requirements.
-            FAO Irrigation and Drainage Paper 56. Food and Agriculture Organization of
-            the United Nations, Rome. Chapter 3, Equation 47.
-        """
-        if wind_10m is None:
-            return None
-        return wind_10m * 0.748
-
-    @staticmethod
     def _round_coordinates(lat: float, lon: float) -> tuple[float, float]:
         """
         Round coordinates to 4 decimal places as required by MET Norway API.
@@ -294,11 +264,7 @@ class METNorwayClient:
         Returns:
             True if in Nordic region (high quality), False otherwise
         """
-        bbox = cls.NORDIC_BBOX
-        return (
-            bbox["lon_min"] <= lon <= bbox["lon_max"]
-            and bbox["lat_min"] <= lat <= bbox["lat_max"]
-        )
+        return GeographicUtils.is_in_nordic(lat, lon)
 
     @classmethod
     def get_recommended_variables(cls, lat: float, lon: float) -> list[str]:
@@ -329,6 +295,7 @@ class METNorwayClient:
             )
             return cls.GLOBAL_VARIABLES
 
+    @validate_coordinates
     async def get_daily_forecast(
         self,
         lat: float,
@@ -369,27 +336,12 @@ class METNorwayClient:
         Raises:
             ValueError: Invalid coordinates or date range exceeds 5-day limit
         """
-        # Validations
-        if not (-90 <= lat <= 90):
-            msg = f"Invalid latitude: {lat}"
-            raise ValueError(msg)
-        if not (-180 <= lon <= 180):
-            msg = f"Invalid longitude: {lon}"
-            raise ValueError(msg)
+        # NOTE: Coordinate and date validation should happen
+        # in climate_validation.py + climate_source_availability.py
+        # BEFORE calling this client. This method assumes pre-validated data.
 
         # Round coordinates to 4 decimals (API best practice)
         lat, lon = self._round_coordinates(lat, lon)
-
-        # Forecast horizon validation (5 days - standardized)
-        now = datetime.now()
-        max_forecast_date = now + timedelta(days=5)
-        if end_date and end_date > max_forecast_date:
-            msg = (
-                f"MET Norway standardized to 5-day "
-                f"forecast. Requested date: {end_date}, "
-                f"limit: {max_forecast_date}"
-            )
-            raise ValueError(msg)
 
         # Default dates
         if not start_date:
@@ -632,13 +584,7 @@ class METNorwayClient:
         end_date: datetime,
     ) -> list[METNorwayDailyData]:
         """
-        Process MET Norway API response.
-
-        Aggregates hourly data to daily with proper handling of:
-        - Instant values (mean aggregation with NaN handling)
-        - Precipitation (sum with 1h priority, 6h fallback)
-        - Temperature extremes (6h projections preferred)
-        - Derived variables (wind_speed_2m)
+        Process MET Norway API response usando METNorwayAggregator.
 
         Args:
             data: API response JSON
@@ -649,8 +595,6 @@ class METNorwayClient:
         Returns:
             List of daily aggregated records
         """
-        result = []
-
         try:
             # Extract geometry for calculations
             geometry = data.get("geometry", {})
@@ -675,193 +619,28 @@ class METNorwayClient:
                 logger.warning("MET Norway: no data")
                 return []
 
-            # Group data by day
-            daily_data = {}
+            # Usar METNorwayAggregator para processamento
+            aggregator = METNorwayAggregator()
 
-            for entry in timeseries:
-                try:
-                    # Parse timestamp
-                    time_str = entry.get("time")
-                    if not time_str:
-                        continue
+            # 1. Agregar dados horários em diários
+            daily_raw_data = aggregator.aggregate_hourly_to_daily(
+                timeseries, start_date, end_date, TimezoneUtils
+            )
 
-                    dt = datetime.fromisoformat(
-                        time_str.replace("Z", "+00:00")
-                    )
-                    date_key = dt.date()
+            # 2. Calcular agregações finais
+            daily_data = aggregator.calculate_daily_aggregations(
+                daily_raw_data, WeatherConversionUtils()
+            )
 
-                    # Filter by period
-                    if start_date and dt.date() < start_date.date():
-                        continue
-                    if end_date and dt.date() > end_date.date():
-                        continue
-
-                    # Initialize day if needed
-                    if date_key not in daily_data:
-                        daily_data[date_key] = {
-                            "temp_values": [],
-                            "humidity_values": [],
-                            "wind_speed_values": [],
-                            "precipitation_1h": [],
-                            "precipitation_6h": [],
-                            "temp_max_6h": [],
-                            "temp_min_6h": [],
-                            "count": 0,
-                        }
-
-                    day_data = daily_data[date_key]
-
-                    # Extract instant values (REAL variable names from API)
-                    # Use .get() for safe NaN/missing key handling
-                    instant = (
-                        entry.get("data", {})
-                        .get("instant", {})
-                        .get("details", {})
-                    )
-
-                    temp = instant.get("air_temperature")
-                    if temp is not None:
-                        day_data["temp_values"].append(temp)
-
-                    humidity = instant.get("relative_humidity")
-                    if humidity is not None:
-                        day_data["humidity_values"].append(humidity)
-
-                    wind_speed = instant.get("wind_speed")
-                    if wind_speed is not None:
-                        day_data["wind_speed_values"].append(wind_speed)
-
-                    # Extract next_1_hours precipitation (PRIORITY)
-                    next_1h = (
-                        entry.get("data", {})
-                        .get("next_1_hours", {})
-                        .get("details", {})
-                    )
-                    precip_1h = next_1h.get("precipitation_amount")
-                    if precip_1h is not None:
-                        day_data["precipitation_1h"].append(precip_1h)
-
-                    # Extract next_6_hours (fallback for precipitation)
-                    next_6h = (
-                        entry.get("data", {})
-                        .get("next_6_hours", {})
-                        .get("details", {})
-                    )
-
-                    precip_6h = next_6h.get("precipitation_amount")
-                    if precip_6h is not None:
-                        day_data["precipitation_6h"].append(precip_6h)
-
-                    temp_max_6h = next_6h.get("air_temperature_max")
-                    if temp_max_6h is not None:
-                        day_data["temp_max_6h"].append(temp_max_6h)
-
-                    temp_min_6h = next_6h.get("air_temperature_min")
-                    if temp_min_6h is not None:
-                        day_data["temp_min_6h"].append(temp_min_6h)
-
-                    day_data["count"] += 1
-
-                except Exception as e:
-                    logger.warning(f"Error processing hourly entry: {e}")
-                    continue
-
-            # Aggregate daily data with derived variables
-            for date_key, day_values in daily_data.items():
-                try:
-                    # Calculate aggregations with NaN handling
-                    temp_mean = (
-                        float(np.nanmean(day_values["temp_values"]))
-                        if day_values["temp_values"]
-                        else None
-                    )
-
-                    # Temp max/min: prefer next_6h, fallback to instant
-                    # Use max/min of 6h forecasts (not mean) for daily extremes
-                    temp_max = (
-                        float(np.nanmax(day_values["temp_max_6h"]))
-                        if day_values["temp_max_6h"]
-                        else (
-                            float(np.nanmax(day_values["temp_values"]))
-                            if day_values["temp_values"]
-                            else None
-                        )
-                    )
-                    temp_min = (
-                        float(np.nanmin(day_values["temp_min_6h"]))
-                        if day_values["temp_min_6h"]
-                        else (
-                            float(np.nanmin(day_values["temp_values"]))
-                            if day_values["temp_values"]
-                            else None
-                        )
-                    )
-
-                    humidity_mean = (
-                        float(np.nanmean(day_values["humidity_values"]))
-                        if day_values["humidity_values"]
-                        else None
-                    )
-
-                    # Wind speed: calculate mean from 10m values,
-                    # then convert to 2m
-                    wind_10m_mean = (
-                        float(np.nanmean(day_values["wind_speed_values"]))
-                        if day_values["wind_speed_values"]
-                        else None
-                    )
-                    wind_2m_mean = self.convert_wind_10m_to_2m(wind_10m_mean)
-
-                    if wind_2m_mean is not None:
-                        logger.debug(
-                            f"✅ Converted wind 10m→2m for {date_key}: "
-                            f"{wind_10m_mean:.2f} → {wind_2m_mean:.2f} m/s"
-                        )
-
-                    # Precipitation: prioritize 1h sum, fallback to 6h sum
-                    if day_values["precipitation_1h"]:
-                        # Best: sum of hourly values
-                        precipitation_sum = float(
-                            np.sum(day_values["precipitation_1h"])
-                        )
-                    elif day_values["precipitation_6h"]:
-                        # Fallback: sum 6h values (each is 6h accumulation)
-                        # Total = sum of all 6h periods in the day
-                        precipitation_sum = float(
-                            np.sum(day_values["precipitation_6h"])
-                        )
-                        logger.debug(
-                            f"Using 6h precipitation fallback for {date_key}: "
-                            f"{len(day_values['precipitation_6h'])} periods"
-                        )
-                    else:
-                        precipitation_sum = 0.0
-
-                    # Create daily record
-                    daily_record = METNorwayDailyData(
-                        date=date_key,
-                        temp_max=temp_max,
-                        temp_min=temp_min,
-                        temp_mean=temp_mean,
-                        humidity_mean=humidity_mean,
-                        precipitation_sum=precipitation_sum,
-                        wind_speed_2m_mean=wind_2m_mean,
-                    )
-
-                    result.append(daily_record)
-
-                except Exception as e:
-                    logger.warning(f"Error aggregating day {date_key}: {e}")
-                    continue
-
-            # Sort by date
-            result.sort(key=lambda x: x.date)
+            # 3. Validar dados agregados
+            if not aggregator.validate_daily_data(daily_data):
+                logger.warning("Dados diários falharam na validação")
 
             logger.info(
-                f"MET Norway parsed: {len(result)} days "
+                f"MET Norway parsed: {len(daily_data)} days "
                 f"from {len(timeseries)} hourly entries"
             )
-            return result
+            return daily_data
 
         except Exception as e:
             logger.error(
@@ -936,7 +715,7 @@ class METNorwayClient:
             "quality_tiers": {
                 "nordic": {
                     "region": "Norway, Denmark, Sweden, Finland, Baltics",
-                    "bbox": self.NORDIC_BBOX,
+                    "bbox": GeographicUtils.NORDIC_BBOX,
                     "resolution": "1 km",
                     "model": "MEPS 2.5km + downscaling",
                     "updates": "Hourly",
@@ -993,3 +772,285 @@ def create_met_norway_client(
         Configured METNorwayClient instance
     """
     return METNorwayClient(cache=cache)
+
+
+class METNorwayAggregator:
+    """
+    Classe especializada para agregação de dados horários MET Norway para diários.
+
+    Responsabilidades:
+    - Agregar dados horários em diários com tratamento adequado de NaN
+    - Calcular estatísticas derivadas (vento 10m→2m, precipitação)
+    - Validar consistência dos dados agregados
+    - Logging detalhado do processo de agregação
+    """
+
+    @staticmethod
+    def aggregate_hourly_to_daily(
+        timeseries: list[dict],
+        start_date: datetime,
+        end_date: datetime,
+        timezone_utils: TimezoneUtils,
+    ) -> dict:
+        """
+        Agrega dados horários em registros diários.
+
+        Args:
+            timeseries: Lista de entradas horárias da API
+            start_date: Data inicial do período
+            end_date: Data final do período
+            timezone_utils: Utilitários de timezone para comparações seguras
+
+        Returns:
+            Lista de dicionários com dados diários agregados
+        """
+        from collections import defaultdict
+        from typing import Dict, List, Any
+        from datetime import date
+
+        daily_data: Dict[date, Dict[str, Any]] = defaultdict(
+            lambda: {
+                "temp_values": [],
+                "humidity_values": [],
+                "wind_speed_values": [],
+                "precipitation_1h": [],
+                "precipitation_6h": [],
+                "temp_max_6h": [],
+                "temp_min_6h": [],
+                "count": 0,
+            }
+        )
+
+        # Processar cada entrada horária
+        for entry in timeseries:
+            try:
+                time_str = entry.get("time")
+                if not time_str:
+                    continue
+
+                dt = datetime.fromisoformat(time_str.replace("Z", "+00:00"))
+                date_key = dt.date()
+
+                # Filtrar por período
+                if timezone_utils.compare_dates_safe(dt, start_date, "lt"):
+                    continue
+                if timezone_utils.compare_dates_safe(dt, end_date, "gt"):
+                    continue
+
+                day_data = daily_data[date_key]
+
+                # Extrair valores instantâneos
+                instant = (
+                    entry.get("data", {}).get("instant", {}).get("details", {})
+                )
+
+                # Temperatura
+                temp = instant.get("air_temperature")
+                if temp is not None:
+                    day_data["temp_values"].append(temp)
+
+                # Umidade
+                humidity = instant.get("relative_humidity")
+                if humidity is not None:
+                    day_data["humidity_values"].append(humidity)
+
+                # Velocidade do vento
+                wind_speed = instant.get("wind_speed")
+                if wind_speed is not None:
+                    day_data["wind_speed_values"].append(wind_speed)
+
+                # Precipitação 1h (prioridade)
+                next_1h = (
+                    entry.get("data", {})
+                    .get("next_1_hours", {})
+                    .get("details", {})
+                )
+                precip_1h = next_1h.get("precipitation_amount")
+                if precip_1h is not None:
+                    day_data["precipitation_1h"].append(precip_1h)
+
+                # Precipitação 6h (fallback)
+                next_6h = (
+                    entry.get("data", {})
+                    .get("next_6_hours", {})
+                    .get("details", {})
+                )
+                precip_6h = next_6h.get("precipitation_amount")
+                if precip_6h is not None:
+                    day_data["precipitation_6h"].append(precip_6h)
+
+                # Temperaturas extremas 6h
+                temp_max_6h = next_6h.get("air_temperature_max")
+                if temp_max_6h is not None:
+                    day_data["temp_max_6h"].append(temp_max_6h)
+
+                temp_min_6h = next_6h.get("air_temperature_min")
+                if temp_min_6h is not None:
+                    day_data["temp_min_6h"].append(temp_min_6h)
+
+                day_data["count"] += 1
+
+            except Exception as e:
+                logger.warning(f"Erro processando entrada horária: {e}")
+                continue
+
+        return dict(daily_data)
+
+    @staticmethod
+    def calculate_daily_aggregations(
+        daily_raw_data: dict,
+        weather_utils: WeatherConversionUtils,
+    ) -> list[METNorwayDailyData]:
+        """
+        Calcula agregações diárias finais a partir dos dados brutos.
+
+        Args:
+            daily_raw_data: Dados diários brutos agrupados por data
+            weather_utils: Utilitários para conversões meteorológicas
+
+        Returns:
+            Lista de registros diários agregados
+        """
+        result = []
+
+        for date_key, day_values in daily_raw_data.items():
+            try:
+                # Temperatura média
+                temp_mean = (
+                    float(np.nanmean(day_values["temp_values"]))
+                    if day_values["temp_values"]
+                    else None
+                )
+
+                # Temperaturas extremas: preferir 6h, fallback para instant
+                temp_max = (
+                    float(np.nanmax(day_values["temp_max_6h"]))
+                    if day_values["temp_max_6h"]
+                    else (
+                        float(np.nanmax(day_values["temp_values"]))
+                        if day_values["temp_values"]
+                        else None
+                    )
+                )
+
+                temp_min = (
+                    float(np.nanmin(day_values["temp_min_6h"]))
+                    if day_values["temp_min_6h"]
+                    else (
+                        float(np.nanmin(day_values["temp_values"]))
+                        if day_values["temp_values"]
+                        else None
+                    )
+                )
+
+                # Umidade média
+                humidity_mean = (
+                    float(np.nanmean(day_values["humidity_values"]))
+                    if day_values["humidity_values"]
+                    else None
+                )
+
+                # Velocidade do vento: converter 10m → 2m
+                wind_10m_mean = (
+                    float(np.nanmean(day_values["wind_speed_values"]))
+                    if day_values["wind_speed_values"]
+                    else None
+                )
+                wind_2m_mean = weather_utils.convert_wind_10m_to_2m(
+                    wind_10m_mean
+                )
+
+                if wind_2m_mean is not None:
+                    logger.debug(
+                        f"✅ Vento convertido 10m→2m para {date_key}: "
+                        f"{wind_10m_mean:.2f} → {wind_2m_mean:.2f} m/s"
+                    )
+
+                # Precipitação: priorizar 1h, fallback para 6h
+                if day_values["precipitation_1h"]:
+                    precipitation_sum = float(
+                        np.sum(day_values["precipitation_1h"])
+                    )
+                elif day_values["precipitation_6h"]:
+                    precipitation_sum = float(
+                        np.sum(day_values["precipitation_6h"])
+                    )
+                    logger.debug(
+                        f"Usando precipitação 6h para {date_key}: "
+                        f"{len(day_values['precipitation_6h'])} períodos"
+                    )
+                else:
+                    precipitation_sum = 0.0
+
+                # Criar registro diário
+                daily_record = METNorwayDailyData(
+                    date=date_key,
+                    temp_max=temp_max,
+                    temp_min=temp_min,
+                    temp_mean=temp_mean,
+                    humidity_mean=humidity_mean,
+                    precipitation_sum=precipitation_sum,
+                    wind_speed_2m_mean=wind_2m_mean,
+                )
+
+                result.append(daily_record)
+
+            except Exception as e:
+                logger.warning(f"Erro agregando dia {date_key}: {e}")
+                continue
+
+        # Ordenar por data
+        result.sort(key=lambda x: x.date)
+        return result
+
+    @staticmethod
+    def validate_daily_data(daily_data: list[METNorwayDailyData]) -> bool:
+        """
+        Valida consistência dos dados diários agregados.
+
+        Args:
+            daily_data: Lista de registros diários
+
+        Returns:
+            True se dados são consistentes, False caso contrário
+        """
+        if not daily_data:
+            logger.warning("Dados diários vazios")
+            return False
+
+        issues = []
+
+        for record in daily_data:
+            # Verificar temperaturas
+            if record.temp_max is not None and record.temp_min is not None:
+                if record.temp_max < record.temp_min:
+                    issues.append(
+                        f"Temperatura inconsistente em {record.date}: "
+                        f"max={record.temp_max} < min={record.temp_min}"
+                    )
+
+            # Verificar umidade
+            if record.humidity_mean is not None:
+                if not (0 <= record.humidity_mean <= 100):
+                    issues.append(
+                        f"Umidade fora do range em {record.date}: "
+                        f"{record.humidity_mean}%"
+                    )
+
+            # Verificar precipitação
+            if record.precipitation_sum is not None:
+                if record.precipitation_sum < 0:
+                    issues.append(
+                        f"Precipitação negativa em {record.date}: "
+                        f"{record.precipitation_sum}mm"
+                    )
+
+        if issues:
+            for issue in issues:
+                logger.warning(f"Problema de validação: {issue}")
+            return False
+
+        logger.debug(
+            f"Dados diários validados: {len(daily_data)} registros OK"
+        )
+        return True

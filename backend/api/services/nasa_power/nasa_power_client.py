@@ -59,6 +59,8 @@ import httpx
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from backend.api.services.geographic_utils import GeographicUtils
+
 
 class NASAPowerConfig(BaseModel):
     """Configuração da API NASA POWER."""
@@ -67,8 +69,6 @@ class NASAPowerConfig(BaseModel):
     timeout: int = 30
     retry_attempts: int = 3
     retry_delay: float = 1.0
-    min_range_days: int = 7
-    max_range_days: int = 30
 
 
 class NASAPowerData(BaseModel):
@@ -124,11 +124,14 @@ class NASAPowerClient:
         """
         Busca dados climáticos diários para um ponto com cache inteligente.
 
+        NOTA: Validações de range devem ser feitas em climate_validation.py
+        antes de chamar este método. Este cliente assume dados já validados.
+
         Args:
             lat: Latitude (-90 to 90)
             lon: Longitude (-180 to 180)
-            start_date: Data inicial (datetime)
-            end_date: Data final (datetime)
+            start_date: Data inicial (datetime) - DEVE estar validada
+            end_date: Data final (datetime) - DEVE estar validada
             community: NASA POWER community (UPPERCASE required):
                 - AG: Agronomy (agronomia - padrão)
                 - RE: Renewable Energy (energia renovável)
@@ -137,25 +140,18 @@ class NASAPowerClient:
         Returns:
             Lista de NASAPowerData com dados climáticos diários
         """
-        # Validações
-        if not (-90 <= lat <= 90):
-            msg = f"Latitude inválida: {lat}"
+        # Validações básicas - usar GeographicUtils (SINGLE SOURCE OF TRUTH)
+        if not GeographicUtils.is_valid_coordinate(lat, lon):
+            msg = f"Coordenadas inválidas: ({lat}, {lon})"
             raise ValueError(msg)
-        if not (-180 <= lon <= 180):
-            msg = f"Longitude inválida: {lon}"
-            raise ValueError(msg)
+
         if start_date > end_date:
             msg = "start_date deve ser <= end_date"
             raise ValueError(msg)
 
-        # Range validation: minimum 7 days, maximum 30 days
-        range_days = (end_date - start_date).days + 1
-        if range_days < self.config.min_range_days:
-            msg = f"Date range must be >= {self.config.min_range_days} days"
-            raise ValueError(msg)
-        if range_days > self.config.max_range_days:
-            msg = f"Date range must be <= {self.config.max_range_days} days"
-            raise ValueError(msg)
+        # IMPORTANTE: Validações de range (7-30 dias) devem ser feitas
+        # em climate_validation.py ANTES de chamar este método.
+        # Este cliente assume dados pré-validados por climate_validation.
 
         # 1. Tenta buscar do cache (se disponível)
         if self.cache:

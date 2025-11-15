@@ -5,10 +5,43 @@ Detecta quais fontes estão disponíveis para uma determinada localização
 e gerencia a fusão de dados de múltiplas fontes.
 """
 
-from datetime import datetime
 from typing import Any
 
 from loguru import logger
+
+from backend.api.services.climate_source_availability import (
+    OperationMode,
+)
+from backend.api.services.geographic_utils import GeographicUtils
+
+
+def normalize_operation_mode(period_type: str | None) -> OperationMode:
+    """
+    Normaliza period_type para OperationMode de forma consistente.
+
+    Args:
+        period_type: String representando o tipo de período
+
+    Returns:
+        OperationMode: Enum normalizado
+
+    Exemplo:
+        mode = normalize_operation_mode("historical")
+        # Retorna: OperationMode.HISTORICAL_EMAIL
+    """
+    period_type_str = (period_type or "dashboard_current").lower()
+
+    # Mapeamento completo de aliases
+    mapping = {
+        "historical": OperationMode.HISTORICAL_EMAIL,
+        "historical_email": OperationMode.HISTORICAL_EMAIL,
+        "dashboard": OperationMode.DASHBOARD_CURRENT,
+        "dashboard_current": OperationMode.DASHBOARD_CURRENT,
+        "forecast": OperationMode.DASHBOARD_FORECAST,
+        "dashboard_forecast": OperationMode.DASHBOARD_FORECAST,
+    }
+
+    return mapping.get(period_type_str, OperationMode.DASHBOARD_CURRENT)
 
 
 class ClimateSourceManager:
@@ -18,7 +51,10 @@ class ClimateSourceManager:
     ------------------------------------
     Todas as fontes: DIÁRIA
         * Uso para mapa mundial dash (qualquer ponto)
-        * Dados diários para período de 7-30 dias
+        * Dados diários com 3 modos de operação:
+          - Historical_email: 1-90 dias (end ≤ hoje-30d, entrega email)
+          - Dashboard_current: [7,14,21,30] dias (end = hoje, web)
+          - Dashboard_forecast: 6 dias fixo (hoje → hoje+5d, web)
         * Sob demanda (clique do usuário)
         * Fusão de múltiplas fontes disponível
 
@@ -28,12 +64,16 @@ class ClimateSourceManager:
     - Open-Meteo Archive: Histórico (1940 → Today-2d), CC-BY-4.0
     - Open-Meteo Forecast: Previsão (Today-30d → Today+5d), CC-BY-4.0
     - NASA POWER: Histórico (1981 → Today-2-7d), Public Domain
-    - Met Norway LocationForecast: Previsão global (Today → Today+5d), CC-BY-4.0
+    - MET Norway: Previsão global (Today → Today+5d), CC-BY-4.0
 
     🇺🇸 USA Continental:
     - NWS Forecast: Previsão (Today → Today+5d), Public Domain
     - NWS Stations: Observações (Today-1d → Now), Public Domain
     """
+
+    # IMPORTANTE: Bounding boxes agora centralizados em geographic_utils.py
+    # Usar GeographicUtils.USA_BBOX e GeographicUtils.NORDIC_BBOX
+    # Remover referências a USA_BBOX e NORDIC_BBOX neste arquivo
 
     # Configuração de fontes de dados disponíveis
     SOURCES_CONFIG: dict[str, dict[str, Any]] = {
@@ -128,7 +168,7 @@ class ClimateSourceManager:
             "name": "NWS Forecast",
             "coverage": "usa",
             "temporal": "hourly",
-            "bbox": (-125.0, 24.0, -66.0, 49.0),  # (W,S,E,N) USA Continental
+            "bbox": GeographicUtils.USA_BBOX,  # USA via GeographicUtils
             "license": "public_domain",  # Domínio Público (US Government)
             "realtime": True,
             "priority": 3,
@@ -155,7 +195,7 @@ class ClimateSourceManager:
             "name": "NWS Stations",
             "coverage": "usa",
             "temporal": "hourly",
-            "bbox": (-125.0, 24.0, -66.0, 49.0),  # (W,S,E,N) USA Continental
+            "bbox": GeographicUtils.USA_BBOX,  # USA via GeographicUtils
             "license": "public_domain",  # Domínio Público (US Government)
             "realtime": True,
             "priority": 3,
@@ -196,8 +236,7 @@ class ClimateSourceManager:
                 #   - 1km MET Nordic, radar + Netatmo crowdsourced
                 # Global: Apenas temperatura e umidade (4 variáveis)
                 #   - 9km ECMWF, precipitação de menor qualidade
-                #     (usar Open-Meteo)
-                # Nota: Nomes refletem schema de saída padronizado,
+                #     (usar Open-Meteo em vez disso)
                 #       mas vêm de variáveis da API MET Norway:
                 #       air_temperature_max/min, air_temperature,
                 #       relative_humidity, precipitation_amount
@@ -218,7 +257,8 @@ class ClimateSourceManager:
             "use_case": (
                 "Regional quality strategy: Nordic (NO/SE/FI/DK) = "
                 "high-quality precipitation (1km + radar). "
-                "Global = temperature/humidity only (skip precipitation, use Open-Meteo)"
+                "Global = temperature/humidity only "
+                "(skip precipitation, use Open-Meteo)"
             ),
             "regional_strategy": {
                 "nordic": {
@@ -226,7 +266,9 @@ class ClimateSourceManager:
                     "resolution": "1km (MET Nordic)",
                     "model": "MEPS 2.5km + downscaling",
                     "updates": "Hourly",
-                    "post_processing": "Radar + Netatmo crowdsourced bias correction",
+                    "post_processing": (
+                        "Radar + Netatmo crowdsourced bias correction"
+                    ),
                     "variables": [
                         "air_temperature_max",
                         "air_temperature_min",
@@ -247,7 +289,9 @@ class ClimateSourceManager:
                         "air_temperature_mean",
                         "relative_humidity_mean",
                     ],
-                    "precipitation_quality": "⚠️ LOW (use Open-Meteo multi-model instead)",
+                    "precipitation_quality": (
+                        "⚠️ LOW (use Open-Meteo multi-model instead)"
+                    ),
                 },
             },
         },
@@ -404,71 +448,352 @@ class ClimateSourceManager:
             len(self.enabled_sources),
         )
 
-    def get_available_sources(self, lat: float, long: float) -> list[dict]:
+    # IMPORTANTE: Métodos de detecção geográfica removidos.
+    # Usar GeographicUtils em geographic_utils.py
+
+    def get_available_sources(self, lat: float, lon: float) -> list[dict]:
         """
-        Retorna fontes disponíveis para uma coordenada específica.
+        Retorna lista simples de fontes disponíveis (para compatibilidade).
+
+        Versão simplificada que retorna lista de dicts com info básica.
+        Para metadados completos, usar get_available_sources_for_location().
 
         Args:
             lat: Latitude (-90 a 90)
-            long: Longitude (-180 a 180)
+            lon: Longitude (-180 a 180)
 
         Returns:
-            List[Dict]: Lista de fontes disponíveis com metadados
+            List[Dict]: Lista de fontes disponíveis
         """
-        available = []
-
-        for source_id, metadata in self.enabled_sources.items():
-            if self._is_point_covered(lat, long, metadata):
-                available.append(
-                    {
-                        "id": source_id,
-                        "name": metadata["name"],
-                        "coverage": metadata["coverage"],
-                        "temporal": metadata["temporal"],
-                        "realtime": metadata["realtime"],
-                        "priority": metadata["priority"],
-                        "delay_hours": metadata.get("delay_hours", 0),
-                        "variables": metadata.get("variables", []),
-                    }
-                )
-
-        # Ordena por prioridade
+        result_dict = self.get_available_sources_for_location(lat, lon)
+        available = [
+            {
+                "id": source_id,
+                "name": metadata["name"],
+                "coverage": metadata["coverage"],
+                "temporal": metadata["temporal"],
+                "realtime": metadata["realtime"],
+                "priority": metadata["priority"],
+                "delay_hours": metadata.get("delay_hours", 0),
+                "variables": metadata.get("variables", []),
+            }
+            for source_id, metadata in result_dict.items()
+            if metadata["available"]
+        ]
         available.sort(key=lambda x: x["priority"])
-
-        logger.info(
-            "Found %d sources for lat=%s, long=%s: %s",
-            len(available),
-            lat,
-            long,
-            [s["id"] for s in available],
-        )
-
         return available
 
+    def get_best_source_for_location(
+        self, lat: float, lon: float
+    ) -> str | None:
+        """
+        Retorna MELHOR fonte para uma localização (highest priority).
+
+        Combina geographic detection com priority ordering:
+        1. USA → NWS Forecast (prioridade 3)
+        2. Nordic → MET Norway (prioridade 4)
+        3. Global → Open-Meteo Archive (prioridade 1)
+        4. Fallback → NASA POWER (prioridade 2)
+
+        Args:
+            lat: Latitude
+            lon: Longitude
+
+        Returns:
+            str: ID da melhor fonte, ou None se nenhuma disponível
+        """
+        available = self.get_available_sources(lat, lon)
+        if not available:
+            logger.warning(
+                "No sources available for lat=%.4f, lon=%.4f", lat, lon
+            )
+            return None
+
+        best = available[0]  # Primeira é a de melhor prioridade
+        logger.debug(
+            "Best source for lat=%.4f, lon=%.4f: %s (priority %d)",
+            lat,
+            lon,
+            best["id"],
+            best["priority"],
+        )
+        return best["id"]
+
+    def get_available_sources_by_temporal_type(
+        self, lat: float, lon: float, temporal_type: str
+    ) -> list[str]:
+        """
+        Retorna fontes compatíveis com um tipo temporal específico.
+
+        Filtra fontes por seu tipo temporal (historical, current, forecast).
+        Mapeia tipos internos:
+        - "historical": nasa_power, openmeteo_archive
+        - "current": openmeteo_archive, nasa_power (current day)
+        - "forecast": openmeteo_forecast, met_norway, nws_forecast
+
+        Args:
+            lat: Latitude
+            lon: Longitude
+            temporal_type: "historical", "current", ou "forecast"
+
+        Returns:
+            List[str]: IDs de fontes compatíveis, ordenados por prioridade
+        """
+        temporal_mapping = {
+            "historical": [
+                "nasa_power",
+                "openmeteo_archive",
+            ],
+            "current": [
+                "openmeteo_archive",
+                "nasa_power",
+            ],
+            "forecast": [
+                "openmeteo_forecast",
+                "met_norway",
+                "nws_forecast",
+            ],
+        }
+
+        if temporal_type not in temporal_mapping:
+            logger.error(
+                "Invalid temporal_type: %s. "
+                "Must be historical/current/forecast",
+                temporal_type,
+            )
+            return []
+
+        available = self.get_available_sources(lat, lon)
+        available_ids = [s["id"] for s in available]
+
+        # Filtrar pelo tipo temporal
+        compatible = [
+            s_id
+            for s_id in temporal_mapping[temporal_type]
+            if s_id in available_ids
+        ]
+
+        logger.debug(
+            "Sources for %s (lat=%.4f, lon=%.4f): %s",
+            temporal_type,
+            lat,
+            lon,
+            compatible,
+        )
+        return compatible
+
+    def validate_source_for_context(
+        self,
+        source_id: str,
+        mode: str | None,
+        start_date,
+        end_date,
+    ) -> tuple[bool, str]:
+        """Valida se uma fonte é compatível com um contexto específico.
+
+        Verifica:
+        1. Se source_id existe
+        2. Se limites temporais cabem na fonte (período)
+        3. Se há restrições do modo
+
+        Args:
+            source_id: ID da fonte (ex: "nasa_power")
+            mode: OperationMode enum ou string
+            start_date: Data de início (datetime object)
+            end_date: Data final (datetime object)
+
+        Returns:
+            Tuple[bool, str]: (is_valid, reason_if_invalid)
+        """
+        # Validação 1: Fonte existe?
+        if source_id not in self.SOURCES_CONFIG:
+            return False, f"Source {source_id} not found"
+
+        source_config = self.SOURCES_CONFIG[source_id]
+
+        # Validação 2: Modo é válido?
+        if not mode:
+            return False, "Mode cannot be None"
+
+        # Converter string para OperationMode se necessário
+        try:
+            if isinstance(mode, str):
+                mode_enum = OperationMode(mode)
+            else:
+                mode_enum = mode
+        except (ValueError, KeyError):
+            return (
+                False,
+                f"Invalid mode: {mode}. Must be one of: "
+                f"{', '.join([m.value for m in OperationMode])}",
+            )
+
+        # Validação 3: Período compatível com modo?
+        period_days = (end_date - start_date).days
+
+        # Limites por modo
+        mode_limits = {
+            OperationMode.HISTORICAL_EMAIL: (1, 90),
+            OperationMode.DASHBOARD_CURRENT: (1, 30),
+            OperationMode.DASHBOARD_FORECAST: (1, 5),
+        }
+        min_days, max_days = mode_limits.get(mode_enum, (1, 30))
+
+        if not (min_days <= period_days <= max_days):
+            return (
+                False,
+                f"Period {period_days} days outside mode range "
+                f"[{min_days}, {max_days}] for {mode}",
+            )
+
+        # Validação 4: Realtime requirement
+        requires_realtime = mode_enum == OperationMode.DASHBOARD_FORECAST
+        if requires_realtime and not source_config.get("realtime", False):
+            return (
+                False,
+                f"{source_id} is not realtime (required for {mode})",
+            )
+
+        logger.debug(
+            "Source %s valid for %s (period: %d days)",
+            source_id,
+            mode,
+            period_days,
+        )
+        return True, "Valid"
+
+    def validate_and_select_source(
+        self,
+        lat: float,
+        lon: float,
+        start_date,
+        end_date,
+        mode: str | None = None,
+        preferred_source: str | None = None,
+    ) -> tuple[str | None, dict]:
+        """
+        ORQUESTRADOR PRINCIPAL - Valida entrada e seleciona fonte otimizada.
+
+        Fluxo:
+        1. Validar coordenadas (latitude, longitude)
+        2. Verificar cobertura geográfica
+        3. Listar fontes disponíveis
+        4. Filtrar por modo temporal (se especificado)
+        5. Validar compatibilidade com período de tempo
+        6. Retornar melhor fonte ou preferida (se válida)
+
+        Args:
+            lat: Latitude (-90 a 90)
+            lon: Longitude (-180 a 180)
+            start_date: Data de início (datetime object)
+            end_date: Data final (datetime object)
+            mode: Opcional - um dos 3 modos (detecção automática se None)
+            preferred_source: Opcional - ID da fonte preferida
+
+        Returns:
+            Tuple[str | None, Dict]:
+            - source_id: ID da fonte selecionada (ou None se falha)
+            - info: Dict com detalhes da seleção
+        """
+        info = {
+            "location": {"lat": lat, "lon": lon},
+            "period": {"start": str(start_date), "end": str(end_date)},
+            "mode": mode,
+            "available_sources": [],
+            "selected_source": None,
+            "reason": None,
+            "is_usa": GeographicUtils.is_in_usa(lat, lon),
+            "is_nordic": GeographicUtils.is_in_nordic(lat, lon),
+        }
+
+        # Passo 1: Validar cobertura geográfica
+        available = self.get_available_sources(lat, lon)
+        info["available_sources"] = [s["id"] for s in available]
+
+        if not available:
+            info["reason"] = "No sources available for this location"
+            logger.warning("No sources for lat=%.4f, lon=%.4f", lat, lon)
+            return None, info
+
+        # Passo 2: Filtrar por tipo temporal (se modo especificado)
+        candidate_sources = [s["id"] for s in available]
+        if mode:
+            # Mapear modo para tipo temporal
+            temporal_type_map = {
+                "historical_email": "historical",
+                "dashboard_current": "current",
+                "dashboard_forecast": "forecast",
+            }
+            temporal_type = temporal_type_map.get(mode)
+            if temporal_type:
+                temporal_compatible = (
+                    self.get_available_sources_by_temporal_type(
+                        lat, lon, temporal_type
+                    )
+                )
+                candidate_sources = temporal_compatible
+
+        # Passo 3: Se fonte preferida foi especificada, validar
+        if preferred_source and mode and preferred_source in candidate_sources:
+            is_valid, reason = self.validate_source_for_context(
+                preferred_source, mode, start_date, end_date
+            )
+            if is_valid:
+                info["selected_source"] = preferred_source
+                info["reason"] = f"User preferred: {preferred_source}"
+                logger.info("Selected preferred source: %s", preferred_source)
+                return preferred_source, info
+            logger.warning(
+                "Preferred source %s invalid: %s",
+                preferred_source,
+                reason,
+            )
+
+        # Passo 4: Selecionar melhor fonte entre disponíveis
+        for source_id in candidate_sources:
+            is_valid, reason = self.validate_source_for_context(
+                source_id, mode, start_date, end_date
+            )
+            if is_valid:
+                info["selected_source"] = source_id
+                info["reason"] = f"Auto-selected: {source_id}"
+                logger.info(
+                    "Selected source: %s for lat=%.4f, lon=%.4f",
+                    source_id,
+                    lat,
+                    lon,
+                )
+                return source_id, info
+
+        # Fallback: Nenhuma fonte válida
+        info["reason"] = "No valid sources for context"
+        logger.error(
+            "No valid sources for lat=%.4f, lon=%.4f, mode=%s",
+            lat,
+            lon,
+            mode,
+        )
+        return None, info
+
     def get_available_sources_for_location(
-        self, lat: float, lon: float, exclude_non_commercial: bool = True
+        self, lat: float, lon: float
     ) -> dict[str, dict]:
         """
         Retorna fontes disponíveis para uma localização específica.
 
-        Este método é otimizado para uso no mapa mundial, excluindo
-        automaticamente fontes com restrições de licença não-comercial
-        quando solicitado (parâmetro exclude_non_commercial).
+        Retorna metadados completos sobre cada fonte (disponibilidade,
+        cobertura geográfica, licença, prioridade, etc).
+
+        Args:
+            lat: Latitude (-90 a 90)
+            lon: Longitude (-180 a 180)
+
+        Returns:
+            Dict[str, Dict]: Dicionário com metadados de cada fonte
         """
         result = {}
 
         for source_id, metadata in self.enabled_sources.items():
-            # Filtrar fontes não-comerciais se solicitado
-            license_type = metadata.get("license", "")
-            is_non_commercial = license_type == "non_commercial"
-
-            if exclude_non_commercial and is_non_commercial:
-                logger.debug(
-                    "Excluding %s (non-commercial license) from world map",
-                    source_id,
-                )
-                continue
-
             # Verificar cobertura geográfica
             bbox = metadata.get("bbox")
             is_covered = self._is_point_covered(lat, lon, metadata)
@@ -477,6 +802,7 @@ class ClimateSourceManager:
             restrictions = metadata.get("restrictions", {})
             can_fuse = not restrictions.get("no_data_fusion", False)
             can_download = not restrictions.get("no_download", False)
+            license_type = metadata.get("license", "")
 
             result[source_id] = {
                 "available": is_covered,
@@ -541,14 +867,14 @@ class ClimateSourceManager:
         return f"{lat_range}, {lon_range}"
 
     def _is_point_covered(
-        self, lat: float, long: float, metadata: dict[str, Any]
+        self, lat: float, lon: float, metadata: dict[str, Any]
     ) -> bool:
         """
-        Verifica se um ponto está coberto pela fonte.
+        Verifica se um ponto está coberto pela fonte usando GeographicUtils.
 
         Args:
             lat: Latitude
-            long: Longitude
+            lon: Longitude
             metadata: Metadados da fonte
 
         Returns:
@@ -558,68 +884,10 @@ class ClimateSourceManager:
 
         # Cobertura global
         if bbox is None:
-            return True
+            return GeographicUtils.is_valid_coordinate(lat, lon)
 
-        # Cobertura regional (bbox format: west, south, east, north)
-        west: float
-        south: float
-        east: float
-        north: float
-        west, south, east, north = bbox
-        return bool(west <= long <= east and south <= lat <= north)
-
-    def validate_period(
-        self, start_date: datetime, end_date: datetime
-    ) -> tuple[bool, str | None]:
-        """
-        Valida período de datas conforme especificações.
-
-        Regras:
-        - Mínimo: 7 dias
-        - Máximo: 30 dias
-        - Não pode ser mais de 1 ano no passado
-        - Não pode ser mais de 1 dia no futuro
-
-        Args:
-            start_date: Data inicial
-            end_date: Data final
-
-        Returns:
-            Tuple[bool, Optional[str]]: (válido, mensagem_erro)
-        """
-        now = datetime.now()
-
-        # Verifica ordem das datas
-        if end_date <= start_date:
-            return False, "Data final deve ser posterior à data inicial"
-
-        # Calcula duração
-        period_days = (end_date - start_date).days + 1
-
-        # Valida duração
-        if period_days < 7:
-            return False, f"Período mínimo: 7 dias (atual: {period_days})"
-
-        if period_days > 30:
-            return False, f"Período máximo: 30 dias (atual: {period_days})"
-
-        # Valida limite passado (1 ano)
-        one_year_ago = now.replace(year=now.year - 1)
-        if start_date < one_year_ago:
-            return False, (
-                f"Data inicial não pode ser anterior a "
-                f"{one_year_ago.strftime('%d/%m/%Y')}"
-            )
-
-        # Valida limite futuro (amanhã)
-        tomorrow = now.replace(hour=23, minute=59, second=59)
-        if end_date > tomorrow:
-            return False, (
-                f"Data final não pode ser posterior a "
-                f"{tomorrow.strftime('%d/%m/%Y')}"
-            )
-
-        return True, None
+        # Usar GeographicUtils para validação consistente de bbox
+        return GeographicUtils.is_in_bbox(lat, lon, bbox)
 
     def get_fusion_weights(
         self, sources: list[str], location: tuple[float, float]
@@ -691,12 +959,3 @@ class ClimateSourceManager:
 
         logger.debug("Fusion weights for %s: %s", sources, weights)
         return weights
-
-    def get_validation_info(self) -> dict:
-        """
-        Retorna informações sobre datasets de validação.
-
-        Returns:
-            Dict: Informações dos datasets de validação
-        """
-        return self.VALIDATION_DATASETS

@@ -4,6 +4,7 @@ ETo Calculation Routes
 
 import time
 from typing import Any, Dict, Optional
+from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -11,6 +12,21 @@ from loguru import logger
 
 from backend.database.connection import get_db
 from backend.database.models.user_favorites import UserFavorites
+
+# Importar 5 módulos de clima
+from backend.api.services.climate_validation import ClimateValidationService
+from backend.api.services.climate_source_availability import (
+    OperationMode,
+)
+from backend.api.services.climate_source_manager import ClimateSourceManager
+
+# Mapeamento de period_type para OperationMode
+# Centraliza conversão de strings antigas para novo enum
+OPERATION_MODE_MAPPING = {
+    "historical_email": OperationMode.HISTORICAL_EMAIL,
+    "dashboard_current": OperationMode.DASHBOARD_CURRENT,
+    "dashboard_forecast": OperationMode.DASHBOARD_FORECAST,
+}
 
 eto_router = APIRouter(prefix="/internal/eto", tags=["ETo"])
 
@@ -71,85 +87,99 @@ async def calculate_eto(
     - Cache automático
 
     Modos de operação (period_type):
-    - historical: 1-90 dias (apenas NASA POWER e OpenMeteo Archive)
-    - dashboard: 7-30 dias (todas as APIs disponíveis)
-    - forecast: hoje até hoje+5d (apenas APIs de previsão)
+    - historical_email: 1-90 dias (apenas NASA POWER e OpenMeteo Archive)
+    - dashboard_current: 7-30 dias (todas as APIs disponíveis)
+    - dashboard_forecast: hoje até hoje+5d (apenas APIs de previsão)
     """
     try:
         from backend.core.eto_calculation.eto_services import (
             EToProcessingService,
         )
-        from datetime import datetime, timedelta
 
-        # 0. Validar period_type e período
-        start = datetime.strptime(request.start_date, "%Y-%m-%d").date()
-        end = datetime.strptime(request.end_date, "%Y-%m-%d").date()
-        today = datetime.now().date()
-        period_days = (end - start).days + 1
-        period_type = request.period_type or "dashboard"
+        # 0. Normalizar period_type para OperationMode
+        period_type_str = (request.period_type or "dashboard_current").lower()
 
-        if period_type == "historical":
-            # Histórico: 1-90 dias, apenas NASA e Archive
-            if period_days < 1 or period_days > 90:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Histórico: período deve ser 1-90 dias "
-                        f"(atual: {period_days})"
-                    ),
-                )
-            if end >= today:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Histórico: período deve ser no passado",
-                )
-            # Forçar apenas fontes históricas
-            if request.sources == "auto" or not request.sources:
-                request.sources = "openmeteo_archive,nasa_power"
+        # Usar mapeamento centralizado
+        operation_mode = OPERATION_MODE_MAPPING.get(
+            period_type_str, OperationMode.DASHBOARD_CURRENT
+        )
 
-        elif period_type == "dashboard":
-            # Dashboard: 7-30 dias
-            if period_days < 7 or period_days > 30:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Dashboard: período deve ser 7-30 dias "
-                        f"(atual: {period_days})"
-                    ),
-                )
+        # 1. Usar ClimateValidationService
+        validator = ClimateValidationService()
+        is_valid, validation_result = validator.validate_all(
+            lat=request.lat,
+            lon=request.lng,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            variables=["et0_fao_evapotranspiration"],
+            source="auto",
+            mode=operation_mode,
+        )
 
-        elif period_type == "forecast":
-            # Forecast: hoje até hoje+5d
-            if start < today:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Forecast: data inicial deve ser >= hoje",
-                )
-            if end > today + timedelta(days=5):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Forecast: data final deve ser <= hoje + 5 dias",
-                )
+        if not is_valid:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Validação falhou: "
+                    f"{validation_result.get('errors', [])}"
+                ),
+            )
 
-        # 1. Auto-seleção de fontes
-        # data_download.py classifica automaticamente como:
-        # - historical (start <= today-30d)
-        # - current (passado recente 7-30 dias)
-        # - forecast (end > today)
+        # 2. Converter datas para datetime objects para manager
+        start_dt = datetime.strptime(request.start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(request.end_date, "%Y-%m-%d")
+
+        # 3. Usar ClimateSourceManager para seleção
+        manager = ClimateSourceManager()
+
         if request.sources == "auto" or not request.sources:
-            selected_source = "data fusion"
+            # Auto-seleção usando validate_and_select_source
+            source_id, source_info = manager.validate_and_select_source(
+                lat=request.lat,
+                lon=request.lng,
+                start_date=start_dt,
+                end_date=end_dt,
+                mode=operation_mode,
+                preferred_source=None,
+            )
+
+            if not source_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Nenhuma fonte disponível: "
+                        f"{source_info.get('reason', 'Unknown error')}"
+                    ),
+                )
+
+            selected_source = source_id
             logger.info(
-                f"Auto-seleção ativada: {period_type} em "
-                f"({request.lat}, {request.lng})"
+                f"Auto-seleção: {operation_mode.value} em "
+                f"({request.lat}, {request.lng}) → {source_id}"
             )
         else:
+            # Validar fonte especificada
             selected_source = request.sources
+            is_compatible, compat_reason = manager.validate_source_for_context(
+                source_id=selected_source,
+                mode=operation_mode,
+                start_date=start_dt,
+                end_date=end_dt,
+            )
+
+            if not is_compatible:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Fonte '{selected_source}' incompatível: "
+                        f"{compat_reason}"
+                    ),
+                )
+
             logger.info(f"Fontes especificadas: {selected_source}")
+            source_info = None
 
-        # 2. Preparar string de fontes para download
-        database = selected_source
-
-        # 3. Obter elevação (se não fornecida)
+        # 4. Obter elevação (se não fornecida)
         elevation = request.elevation
         if elevation is None:
             logger.info(
@@ -157,7 +187,7 @@ async def calculate_eto(
                 f"será obtida via API"
             )
 
-        # 4. Executar cálculo ETo
+        # 5. Executar cálculo ETo
         service = EToProcessingService(db_session=db)
         result = await service.process_location(
             latitude=request.lat,
@@ -166,16 +196,17 @@ async def calculate_eto(
             end_date=request.end_date,
             elevation=elevation,
             include_recomendations=False,
-            database=database,
+            database=selected_source,
         )
 
-        # 5. Retornar resultados
+        # 6. Retornar resultados
         return {
             "status": "success",
             "data": result.get("eto_data", []),
             "statistics": result.get("statistics", {}),
             "source": selected_source,
-            "database_used": database,
+            "source_info": source_info,
+            "operation_mode": operation_mode.value,
             "warnings": result.get("warnings", []),
             "location": {
                 "lat": request.lat,

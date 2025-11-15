@@ -48,6 +48,16 @@ import numpy as np
 from loguru import logger
 from pydantic import BaseModel, Field
 
+try:
+    from backend.api.services.geographic_utils import (
+        GeographicUtils,
+        TimezoneUtils,
+    )
+    from backend.api.services.weather_utils import WeatherConversionUtils
+except ImportError:
+    from ..geographic_utils import GeographicUtils, TimezoneUtils
+    from ..weather_utils import WeatherConversionUtils
+
 
 class NWSConfig(BaseModel):
     """
@@ -318,7 +328,9 @@ class NWSForecastClient:
             return []
 
         hourly_data = []
-        now = datetime.now(tz=None).replace(tzinfo=None)  # UTC naive
+        from datetime import timezone
+
+        now_utc = datetime.now(timezone.utc)
 
         for period in periods:
             try:
@@ -329,19 +341,22 @@ class NWSForecastClient:
                 timestamp = datetime.fromisoformat(
                     timestamp_str.replace("Z", "+00:00")
                 )
-                # Converter para naive UTC para comparação
-                timestamp_naive = timestamp.replace(tzinfo=None)
 
-                if timestamp_naive < now:
+                # Filter past data (timezone-aware comparison)
+                if timestamp < now_utc:
                     continue
 
-                # Temperatura
+                # Temperatura (conversão °F → °C)
                 temp_val = period.get("temperature")
                 temp_unit = period.get("temperatureUnit", "F")
                 temp_celsius = None
                 if temp_val is not None:
                     if temp_unit == "F":
-                        temp_celsius = (temp_val - 32) * 5 / 9
+                        temp_celsius = (
+                            WeatherConversionUtils.fahrenheit_to_celsius(
+                                temp_val
+                            )
+                        )
                     else:
                         temp_celsius = float(temp_val)
 
@@ -357,12 +372,18 @@ class NWSForecastClient:
                     if parts:
                         try:
                             speed_mph = float(parts[0])
-                            wind_speed_ms = speed_mph * 0.44704
+                            wind_speed_ms = WeatherConversionUtils.mph_to_ms(
+                                speed_mph
+                            )
                         except (ValueError, IndexError):
                             pass
 
                 # Converter vento de 10m para 2m (FAO-56)
-                wind_speed_2m_ms = self.convert_wind_10m_to_2m(wind_speed_ms)
+                wind_speed_2m_ms = (
+                    WeatherConversionUtils.convert_wind_10m_to_2m(
+                        wind_speed_ms
+                    )
+                )
 
                 precip_val = period.get("quantitativePrecipitation", {}).get(
                     "value"
@@ -399,41 +420,6 @@ class NWSForecastClient:
                 continue
 
         return hourly_data
-
-    @staticmethod
-    def convert_wind_10m_to_2m(wind_10m: float | None) -> float | None:
-        """
-        Converte velocidade do vento de 10m para 2m usando perfil logarítmico.
-
-        Fórmula FAO-56 (Allen et al., 1998):
-        u2 = uz × (4.87) / ln(67.8 × z - 5.42)
-
-        onde:
-        - u2 = velocidade do vento a 2m (m/s)
-        - uz = velocidade do vento na altura z (m/s)
-        - z = altura de medição (10m)
-        - ln = logaritmo natural
-
-        Para z=10m:
-        u2 = u10 × 4.87 / ln(67.8×10 - 5.42)
-        u2 = u10 × 4.87 / ln(672.58)
-        u2 = u10 × 4.87 / 6.511
-        u2 ≈ u10 × 0.748
-
-        Referência: FAO Irrigation and Drainage Paper 56
-        Chapter 3, Equation 47
-
-        Args:
-            wind_10m: Velocidade do vento a 10m (m/s)
-
-        Returns:
-            Velocidade do vento a 2m (m/s) ou None
-        """
-        if wind_10m is None:
-            return None
-
-        # Conversão direta usando fator 0.748 (pré-calculado)
-        return wind_10m * 0.748
 
     async def _delay_retry(self, attempt: int):
         """Delay exponencial entre tentativas."""
@@ -479,10 +465,17 @@ class NWSForecastClient:
         Agrega dados horarios em estatisticas diarias usando numpy.
         Retorna ate 5 dias de previsao (limite do NWS).
 
+        IMPORTANTE: Este cliente ASSUME que:
+        - Coordenadas validadas em climate_validation.py
+        - Cobertura USA validada em climate_source_selector.py
+        - Period (hoje → hoje+5d) validado em
+          climate_source_availability.py
+        Este cliente APENAS busca dados, sem re-validar.
+
         Agregacao:
             - Temperatura: mean/max/min (numpy)
             - Umidade: mean (numpy)
-            - Vento: mean (numpy)
+            - Vento: mean a 2m (numpy, convertido FAO-56)
             - Precipitacao: sum (numpy)
             - Probabilidade precipitacao: mean (numpy)
 
@@ -639,12 +632,11 @@ class NWSForecastClient:
         }
 
     def is_in_coverage(self, lat: float, lon: float) -> bool:
-        """Verifica se coordenadas estao na cobertura NWS."""
-        if -125.0 <= lon <= -66.0 and 24.0 <= lat <= 49.0:
-            return True
-        if -180.0 <= lon <= -66.0 and 18.0 <= lat <= 71.0:
-            return True
-        return False
+        """Verifica se coordenadas estao na cobertura NWS.
+
+        Usa GeographicUtils como SINGLE SOURCE OF TRUTH.
+        """
+        return GeographicUtils.is_in_usa(lat, lon)
 
 
 # Factory function

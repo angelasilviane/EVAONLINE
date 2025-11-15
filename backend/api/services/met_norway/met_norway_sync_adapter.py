@@ -26,6 +26,8 @@ from typing import Any
 
 from loguru import logger
 
+from backend.api.services.geographic_utils import GeographicUtils
+
 from .met_norway_client import (
     METNorwayDailyData,
     METNorwayClient,
@@ -107,12 +109,9 @@ class METNorwaySyncAdapter:
         client = METNorwayClient(config=self.config, cache=self.cache)
 
         try:
-            # Validações básicas (sem limitação geográfica!)
-            if not (-90 <= lat <= 90):
-                msg = f"Latitude inválida: {lat}"
-                raise ValueError(msg)
-            if not (-180 <= lon <= 180):
-                msg = f"Longitude inválida: {lon}"
+            # Validações básicas - usar GeographicUtils (SINGLE SOURCE OF TRUTH)
+            if not GeographicUtils.is_valid_coordinate(lat, lon):
+                msg = f"Coordenadas inválidas: ({lat}, {lon})"
                 raise ValueError(msg)
 
             # Log região detectada

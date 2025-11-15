@@ -14,21 +14,114 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 CACHE_EXPIRY_HOURS = 24  # 24 hours
 
 
+def _get_validation_limits(
+    region: str = "global",
+) -> dict:
+    """
+    Retorna limites de validação para diferentes regiões.
+
+    Args:
+        region: "brazil" (Xavier et al. 2016, 2022) ou
+            "global" (limites mundiais)
+
+    Returns:
+        Dict[str, Tuple[float, float, str]]: {coluna: (min, max, inclusive)}
+    """
+    # ─────────────────────────────────────────────────────────────
+    # Limites GLOBAIS (mundo inteiro)
+    # ─────────────────────────────────────────────────────────────
+    global_limits = {
+        # NASA POWER
+        "T2M_MAX": (-90, 60, "neither"),
+        "T2M_MIN": (-90, 60, "neither"),
+        "T2M": (-90, 60, "neither"),
+        "RH2M": (0, 100, "both"),
+        "WS2M": (0, 113, "left"),
+        "PRECTOTCORR": (0, 2000, "neither"),
+        "ALLSKY_SFC_SW_DWN": (0, 45, "left"),
+        # Open-Meteo Archive/Forecast
+        "temperature_2m_max": (-90, 60, "neither"),
+        "temperature_2m_min": (-90, 60, "neither"),
+        "temperature_2m_mean": (-90, 60, "neither"),
+        "relative_humidity_2m_max": (0, 100, "both"),
+        "relative_humidity_2m_mean": (0, 100, "both"),
+        "relative_humidity_2m_min": (0, 100, "both"),
+        "wind_speed_10m_max": (0, 113, "left"),
+        "wind_speed_10m_mean": (0, 113, "left"),
+        "shortwave_radiation_sum": (0, 45, "left"),
+        "daylight_duration": (0, 24, "both"),
+        "sunshine_duration": (0, 24, "both"),
+        "precipitation_sum": (0, 2000, "neither"),
+        "et0_fao_evapotranspiration": (0, 20, "left"),
+        # MET Norway
+        "pressure_mean_sea_level": (800, 1150, "both"),
+        "temp_celsius": (-90, 60, "neither"),
+        "humidity_percent": (0, 100, "both"),
+        # NWS
+        "wind_speed_ms": (0, 113, "left"),
+        "precipitation_mm": (0, 2000, "neither"),
+    }
+
+    # ─────────────────────────────────────────────────────────────
+    # Limites BRASIL (Xavier et al. 2016, 2022)
+    # "New improved Brazilian daily weather gridded data (1961–2020)"
+    # ─────────────────────────────────────────────────────────────
+    brazil_limits = {
+        # NASA POWER
+        "T2M_MAX": (-30, 50, "neither"),
+        "T2M_MIN": (-30, 50, "neither"),
+        "T2M": (-30, 50, "neither"),
+        "RH2M": (0, 100, "both"),
+        "WS2M": (0, 100, "left"),
+        "PRECTOTCORR": (0, 450, "neither"),
+        "ALLSKY_SFC_SW_DWN": (0, 40, "left"),
+        # Open-Meteo Archive/Forecast
+        "temperature_2m_max": (-30, 50, "neither"),
+        "temperature_2m_min": (-30, 50, "neither"),
+        "temperature_2m_mean": (-30, 50, "neither"),
+        "relative_humidity_2m_max": (0, 100, "both"),
+        "relative_humidity_2m_mean": (0, 100, "both"),
+        "relative_humidity_2m_min": (0, 100, "both"),
+        "wind_speed_10m_max": (0, 100, "left"),
+        "wind_speed_10m_mean": (0, 100, "left"),
+        "shortwave_radiation_sum": (0, 40, "left"),
+        "daylight_duration": (0, 24, "both"),
+        "sunshine_duration": (0, 24, "both"),
+        "precipitation_sum": (0, 450, "neither"),
+        "et0_fao_evapotranspiration": (0, 15, "left"),
+        # MET Norway
+        "pressure_mean_sea_level": (900, 1100, "both"),
+        "temp_celsius": (-30, 50, "neither"),
+        "humidity_percent": (0, 100, "both"),
+        # NWS
+        "wind_speed_ms": (0, 100, "left"),
+        "precipitation_mm": (0, 450, "neither"),
+    }
+
+    if region.lower() == "brazil":
+        logger.info("Usando limites de validação do Brasil (Xavier et al.)")
+        return brazil_limits
+    else:
+        logger.info("Usando limites de validação globais")
+        return global_limits
+
+
 @shared_task
 def data_initial_validate(
-    weather_df: pd.DataFrame, latitude: float
+    weather_df: pd.DataFrame, latitude: float, region: str = "global"
 ) -> Tuple[pd.DataFrame, List[str]]:
     """
-    Validates weather data based on physical limits from Xavier et al. (2016),
-    Xavier et al. (2022) and the Brazilian gridded dataset methodology.
+    Validates weather data based on physical limits.
 
-    Physical limits follow "New improved Brazilian daily weather gridded data
-    (1961–2020)" by Xavier et al.:
-    - 0 mm < precipitation < 450 mm
-    - 0.03Ra ≤ solar_radiation < Ra (where Ra is extraterrestrial radiation)
-    - 0 m/s ≤ wind_speed < 100 m/s
-    - −30°C < temperature_max
-    - temperature_min < 50°C
+    Physical limits follow scientific literature:
+    - **Brazil** (Xavier et al. 2016, 2022):
+      - 0 mm < precipitation < 450 mm
+      - 0.03Ra ≤ solar_radiation < Ra
+      - 0 m/s ≤ wind_speed < 100 m/s
+      - −30°C < temperature_max
+      - temperature_min < 50°C
+    - **Global** (conservative world limits):
+      - More relaxed ranges based on world records
 
     Args:
         weather_df (pd.DataFrame): Weather data with index as datetime and
@@ -36,6 +129,8 @@ def data_initial_validate(
             PRECTOTCORR.
         latitude (float): Latitude for calculating extraterrestrial radiation
             (Ra), between -90 and 90.
+        region (str): "brazil" for Xavier et al. limits or "global" for
+            conservative world limits. Defaults to "global".
 
     Returns:
         Tuple[pd.DataFrame, List[str]]: Validated DataFrame and list of
@@ -43,7 +138,9 @@ def data_initial_validate(
 
     Example:
         >>> df = pd.DataFrame({...}, index=pd.to_datetime([...]))
-        >>> validated_df, warnings = data_initial_validate(df, latitude=-10.0)
+        >>> validated_df, warnings = data_initial_validate(
+        ...     df, latitude=-10.0, region="brazil"
+        ... )
     """
     logger.info("Validating weather data")
     warnings = []
@@ -83,14 +180,21 @@ def data_initial_validate(
     unique_days = weather_df["day_of_year"].unique()
     day_of_year_unique = unique_days.astype(float)
 
-    dr = 1 + 0.033 * np.cos(2 * np.pi * day_of_year_unique / total_days_in_year)
-    delta = 0.409 * np.sin((2 * np.pi * day_of_year_unique / total_days_in_year) - 1.39)
+    dr = 1 + 0.033 * np.cos(
+        2 * np.pi * day_of_year_unique / total_days_in_year
+    )
+    delta = 0.409 * np.sin(
+        (2 * np.pi * day_of_year_unique / total_days_in_year) - 1.39
+    )
     omega_s = np.arccos(-np.tan(phi) * np.tan(delta))
     const = (24 * 60 * 0.0820) / np.pi
     Ra_unique = (
         const
         * dr
-        * (omega_s * np.sin(phi) * np.sin(delta) + np.cos(phi) * np.cos(delta) * np.sin(omega_s))
+        * (
+            omega_s * np.sin(phi) * np.sin(delta)
+            + np.cos(phi) * np.cos(delta) * np.sin(omega_s)
+        )
     )
 
     # Create mapping from day_of_year to Ra
@@ -103,61 +207,30 @@ def data_initial_validate(
         logger.error(warnings[-1])
 
     # Store additional parameters for reference
-    weather_df["dr"] = weather_df["day_of_year"].map(dict(zip(unique_days, dr)))
-    weather_df["delta"] = weather_df["day_of_year"].map(dict(zip(unique_days, delta)))
-    weather_df["omega_s"] = weather_df["day_of_year"].map(dict(zip(unique_days, omega_s)))
+    weather_df["dr"] = weather_df["day_of_year"].map(
+        dict(zip(unique_days, dr))
+    )
+    weather_df["delta"] = weather_df["day_of_year"].map(
+        dict(zip(unique_days, delta))
+    )
+    weather_df["omega_s"] = weather_df["day_of_year"].map(
+        dict(zip(unique_days, omega_s))
+    )
 
-    # Apply physical limits from Xavier et al. (2016, 2022)
+    # Apply physical limits based on region
     # Suporta TODAS as variáveis retornadas pelas 7 fontes de dados para ETo:
     # NASA POWER, Open-Meteo Archive/Forecast,
     # MET Norway Locationforecast/FROST, NWS Forecast/Stations
-    limits = {
-        # NASA POWER - 7 variáveis retornadas
-        "T2M_MAX": (-30, 50, "neither"),  # -30°C < Tmax < 50°C
-        "T2M_MIN": (-30, 50, "neither"),  # -30°C < Tmin < 50°C
-        "T2M": (-30, 50, "neither"),  # -30°C < T < 50°C
-        "RH2M": (0, 100, "both"),  # 0% ≤ RH ≤ 100%
-        "WS2M": (0, 100, "left"),  # 0 m/s ≤ u2 < 100 m/s
-        "PRECTOTCORR": (0, 450, "neither"),  # 0 mm < pr < 450 mm
-        "ALLSKY_SFC_SW_DWN": (0, 40, "left"),
-        # MJ/m²/day (will be validated with Ra)
-        # Open-Meteo Archive/Forecast - 13 variáveis retornadas
-        "temperature_2m_max": (-30, 50, "neither"),  # -30°C < Tmax < 50°C
-        "temperature_2m_min": (-30, 50, "neither"),  # -30°C < Tmin < 50°C
-        "temperature_2m_mean": (-30, 50, "neither"),  # -30°C < T < 50°C
-        "relative_humidity_2m_max": (0, 100, "both"),  # 0% ≤ RH ≤ 100%
-        "relative_humidity_2m_mean": (0, 100, "both"),
-        # 0% ≤ RH ≤ 100%
-        "relative_humidity_2m_min": (0, 100, "both"),  # 0% ≤ RH ≤ 100%
-        "wind_speed_10m_max": (0, 100, "left"),  # 0 m/s ≤ u2 < 100 m/s
-        "wind_speed_10m_mean": (0, 100, "left"),  # 0 m/s ≤ u2 < 100 m/s
-        "shortwave_radiation_sum": (0, 40, "left"),
-        # MJ/m²/day (will be validated with Ra)
-        "daylight_duration": (0, 24, "both"),  # 0h ≤ duration ≤ 24h
-        "sunshine_duration": (0, 24, "both"),  # 0h ≤ duration ≤ 24h
-        "precipitation_sum": (0, 450, "neither"),  # 0 mm < pr < 450 mm
-        "et0_fao_evapotranspiration": (0, 15, "left"),
-        # 0 mm/day ≤ ETo < 15 mm/day
-        # MET Norway Locationforecast - 9 variáveis retornadas
-        "pressure_mean_sea_level": (900, 1100, "both"),
-        # 900 hPa ≤ P ≤ 1100 hPa
-        # Outras variáveis MET Norway já cobertas acima
-        # (temperaturas, umidade, vento, radiação, precipitação)
-        # MET Norway FROST e NWS - variáveis compartilhadas
-        "temp_celsius": (-30, 50, "neither"),  # -30°C < T < 50°C
-        "humidity_percent": (0, 100, "both"),  # 0% ≤ RH ≤ 100%
-        # NWS Forecast/Stations - variáveis específicas
-        "wind_speed_ms": (0, 100, "left"),  # 0 m/s ≤ u2 < 100 m/s
-        "precipitation_mm": (0, 450, "neither"),
-        # 0 mm < pr < 450 mm
-    }
+    limits = _get_validation_limits(region)
 
     # Validate numeric columns
     for col, (min_val, max_val, inclusive) in limits.items():
         if col in weather_df.columns:
+            # Cast inclusive to the correct type for pandas.between()
+            inclusive_type = inclusive  # type: ignore
             invalid_mask = ~weather_df[col].between(
-                min_val, max_val, inclusive=inclusive
-            )  # type: ignore
+                min_val, max_val, inclusive=inclusive_type
+            )
             invalid_count = invalid_mask.sum()
             if invalid_count > 0:
                 percent_invalid = (invalid_count / len(weather_df)) * 100
@@ -191,13 +264,17 @@ def data_initial_validate(
                     f"({percent_invalid:.2f}%) replaced with NaN."
                 )
                 logger.warning(warnings[-1])
-            weather_df[rad_col] = weather_df[rad_col].where(~invalid_rad_mask, np.nan)
+            weather_df[rad_col] = weather_df[rad_col].where(
+                ~invalid_rad_mask, np.nan
+            )
 
     # Metric: Total invalid values
     invalid_rows = weather_df[weather_df.isna().any(axis=1)]
     if not invalid_rows.empty:
         total_invalid = invalid_rows.isna().sum().sum()
-        percent_invalid = (total_invalid / (len(weather_df) * len(weather_df.columns))) * 100
+        percent_invalid = (
+            total_invalid / (len(weather_df) * len(weather_df.columns))
+        ) * 100
         warnings.append(
             f"Total invalid values replaced with NaN: {total_invalid} "
             f"({percent_invalid:.2f}% of data)."
@@ -209,7 +286,9 @@ def data_initial_validate(
 
 @shared_task
 def detect_outliers_iqr(
-    weather_df: pd.DataFrame, iqr_factor: float = 1.5, max_outlier_percent: float = 5.0
+    weather_df: pd.DataFrame,
+    iqr_factor: float = 1.5,
+    max_outlier_percent: float = 5.0,
 ) -> Tuple[pd.DataFrame, List[str]]:
     """
     Detect outliers using IQR method with adaptive factors for short-term data.
@@ -291,7 +370,8 @@ def detect_outliers_iqr(
         col
         for col in weather_df.columns
         if col not in excluded_cols
-        and weather_df[col].dtype in [np.float64, np.int64, np.float32, np.int32]
+        and weather_df[col].dtype
+        in [np.float64, np.int64, np.float32, np.int32]
     ]
 
     if not numeric_cols:
@@ -318,7 +398,9 @@ def detect_outliers_iqr(
         col_lower = col_name.lower()
 
         # Strict factors for variables with low expected variability
-        if any(term in col_lower for term in ["pressure", "duration", "sunshine"]):
+        if any(
+            term in col_lower for term in ["pressure", "duration", "sunshine"]
+        ):
             return adaptive_factors["strict"]
 
         # Lenient factors for variables with high natural variability
@@ -344,7 +426,10 @@ def detect_outliers_iqr(
 
         # Check data quality before outlier detection
         if col_data.std() == 0:
-            warnings.append(f"Skipping outlier detection for {col}: " "no variance in data.")
+            warnings.append(
+                f"Skipping outlier detection for {col}: "
+                "no variance in data."
+            )
             continue
 
         iqr_factor_adaptive = get_iqr_factor(col)
@@ -357,7 +442,9 @@ def detect_outliers_iqr(
         if IQR > 0:
             lower_bound = Q1 - iqr_factor_adaptive * IQR
             upper_bound = Q3 + iqr_factor_adaptive * IQR
-            outlier_mask = (weather_df[col] < lower_bound) | (weather_df[col] > upper_bound)
+            outlier_mask = (weather_df[col] < lower_bound) | (
+                weather_df[col] > upper_bound
+            )
             outlier_count = outlier_mask.sum()
 
             weather_df[col] = weather_df[col].where(~outlier_mask, np.nan)
@@ -387,7 +474,9 @@ def detect_outliers_iqr(
             total_outliers_removed += outlier_count
 
     if total_outliers_removed > 0:
-        total_percent = (total_outliers_removed / (len(weather_df) * len(numeric_cols))) * 100
+        total_percent = (
+            total_outliers_removed / (len(weather_df) * len(numeric_cols))
+        ) * 100
         warnings.append(
             f"Total outliers removed: {total_outliers_removed} "
             f"({total_percent:.2f}% of remaining data)."
@@ -432,14 +521,17 @@ def data_impute(weather_df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
         col
         for col in weather_df.columns
         if col not in ["Ra", "dr", "delta", "omega_s"]
-        and weather_df[col].dtype in [np.float64, np.int64, np.float32, np.int32]
+        and weather_df[col].dtype
+        in [np.float64, np.int64, np.float32, np.int32]
     ]
 
     for col in numeric_cols:
         missing_count = weather_df[col].isna().sum()
         if missing_count > 0:
             percent_missing = (missing_count / len(weather_df)) * 100
-            weather_df[col] = weather_df[col].interpolate(method="linear", limit_direction="both")
+            weather_df[col] = weather_df[col].interpolate(
+                method="linear", limit_direction="both"
+            )
             warnings.append(
                 f"Imputed {missing_count} missing values in {col} "
                 f"({percent_missing:.2f}%) using linear interpolation."
@@ -449,7 +541,9 @@ def data_impute(weather_df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
     # Check for remaining NaNs and apply fallback
     remaining_nans = weather_df[numeric_cols].isna().sum().sum()
     if remaining_nans > 0:
-        percent_remaining = (remaining_nans / (len(weather_df) * len(numeric_cols))) * 100
+        percent_remaining = (
+            remaining_nans / (len(weather_df) * len(numeric_cols))
+        ) * 100
         warnings.append(
             f"Warning: {remaining_nans} missing values "
             f"({percent_remaining:.2f}%) could not be imputed "
@@ -465,7 +559,9 @@ def data_impute(weather_df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
                 weather_df[col] = weather_df[col].bfill()
                 # Finally, use mean for any remaining NaNs
                 if weather_df[col].isna().any():
-                    weather_df[col] = weather_df[col].fillna(weather_df[col].mean())
+                    weather_df[col] = weather_df[col].fillna(
+                        weather_df[col].mean()
+                    )
                     warnings.append(
                         f"Filled remaining NaNs in {col} with "
                         f"mean value after forward/backward fill."
@@ -477,7 +573,10 @@ def data_impute(weather_df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
 
 @shared_task
 def preprocessing(
-    weather_df: pd.DataFrame, latitude: float, cache_key: Optional[str] = None
+    weather_df: pd.DataFrame,
+    latitude: float,
+    cache_key: Optional[str] = None,
+    region: str = "global",
 ) -> Tuple[pd.DataFrame, List[str]]:
     """
     Preprocessing pipeline: validation, outlier detection, and imputation.
@@ -485,12 +584,15 @@ def preprocessing(
     This function implements the complete preprocessing pipeline for climate
     data used in ETo calculations. Input data should already be spatially
     interpolated (e.g., via IDW/ADW methods as described in Xavier et al.
-    2022). The pipeline follows FAO-56 recommendations for temporal imputation.
+    2022). The pipeline follows FAO-56 recommendations for temporal
+    imputation.
 
     Args:
         weather_df (pd.DataFrame): Weather data with datetime index.
         latitude (float): Latitude for Ra calculation, between -90 and 90.
         cache_key (Optional[str]): Key for caching results in Redis.
+        region (str): "brazil" (Xavier et al. 2016, 2022) or "global"
+            (conservative world limits). Defaults to "global".
 
     Returns:
         Tuple[pd.DataFrame, List[str]]: Preprocessed DataFrame and list of
@@ -526,13 +628,18 @@ def preprocessing(
     redis_client = None
     if cache_key:
         try:
-            redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=False)
+            redis_client = redis.Redis.from_url(
+                REDIS_URL, decode_responses=False
+            )
             redis_client.ping()  # Test connection
             cached_data = redis_client.get(cache_key)
             if cached_data:
                 try:
                     df = pickle.loads(cached_data)
-                    logger.info(f"Loaded preprocessed data from Redis cache: " f"{cache_key}")
+                    logger.info(
+                        f"Loaded preprocessed data from Redis cache: "
+                        f"{cache_key}"
+                    )
                     return df, ["Loaded from cache"]
                 except (pickle.UnpicklingError, EOFError) as e:
                     warnings.append(f"Failed to unpickle cached data: {e}")
@@ -549,11 +656,15 @@ def preprocessing(
             logger.error(warnings[-1])
 
     # Step 1: Initial validation
-    weather_df, validate_warnings = data_initial_validate(weather_df, latitude)
+    weather_df, validate_warnings = data_initial_validate(
+        weather_df, latitude, region
+    )
     warnings.extend(validate_warnings)
 
     # Step 2: Outlier detection with IQR
-    weather_df, outlier_warnings = detect_outliers_iqr(weather_df, iqr_factor=1.5)
+    weather_df, outlier_warnings = detect_outliers_iqr(
+        weather_df, iqr_factor=1.5
+    )
     warnings.extend(outlier_warnings)
 
     # Step 3: Imputation
@@ -564,7 +675,9 @@ def preprocessing(
     if redis_client and cache_key:
         try:
             redis_client.setex(
-                cache_key, timedelta(hours=CACHE_EXPIRY_HOURS), pickle.dumps(weather_df)
+                cache_key,
+                timedelta(hours=CACHE_EXPIRY_HOURS),
+                pickle.dumps(weather_df),
             )
             logger.info(f"Saved preprocessed data to Redis cache: {cache_key}")
         except redis.ConnectionError as e:
@@ -582,13 +695,19 @@ def preprocessing(
 
     # Final summary: Count total operations performed
     total_invalid = sum(
-        1 for w in warnings if "Invalid values" in w and any(char.isdigit() for char in w)
+        1
+        for w in warnings
+        if "Invalid values" in w and any(char.isdigit() for char in w)
     )
     total_outliers = sum(
-        1 for w in warnings if "outliers" in w and any(char.isdigit() for char in w)
+        1
+        for w in warnings
+        if "outliers" in w and any(char.isdigit() for char in w)
     )
     total_imputed = sum(
-        1 for w in warnings if "missing values" in w and any(char.isdigit() for char in w)
+        1
+        for w in warnings
+        if "missing values" in w and any(char.isdigit() for char in w)
     )
 
     warnings.append(

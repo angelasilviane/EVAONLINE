@@ -96,8 +96,8 @@ async def track_geolocation(data: GeolocationRequest, request: Request):
 
         return GeolocationResponse(
             status="success",
-            visitor_id=visitor.visitor_id,
-            visit_count=visitor.visit_count,
+            visitor_id=str(visitor.visitor_id),  # type: ignore
+            visit_count=int(visitor.visit_count),  # type: ignore
             message="Geolocalização registrada com sucesso",
         )
 
@@ -112,7 +112,7 @@ async def track_geolocation(data: GeolocationRequest, request: Request):
 @router.get("/visitor/{visitor_id}")
 async def get_visitor_info(visitor_id: str):
     """
-    Retorna informações do visitante.
+    Retorna informações do visitante com contexto climático.
 
     **Resposta:**
     ```json
@@ -126,6 +126,7 @@ async def get_visitor_info(visitor_id: str):
             "longitude": -47.8828,
             "accuracy": 50
         },
+        "climate_region": "global",
         "device_type": "desktop",
         "browser": "chrome",
         "os": "windows"
@@ -154,6 +155,7 @@ async def get_visitor_info(visitor_id: str):
             },
             "country": visitor.country,
             "city": visitor.city,
+            "climate_region": visitor.climate_region,
             "device_type": visitor.device_type,
             "browser": visitor.browser,
             "os": visitor.os,
