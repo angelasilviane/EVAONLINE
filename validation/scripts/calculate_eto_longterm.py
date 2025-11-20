@@ -41,6 +41,7 @@ import time
 # Add project root to Python path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
+sys.path.insert(0, str(project_root / "validation"))
 
 import pandas as pd
 from loguru import logger
@@ -65,8 +66,12 @@ from validation.data_download_historical import (
 from validation_logic_eto.api.services.opentopo.opentopo_sync_adapter import (
     OpenTopoSyncAdapter,
 )
-from validation_logic_eto.core.eto_calculation.eto_services import EToCalculationService
-from validation_logic_eto.api.services.weather_utils import ElevationUtils
+from validation_logic_eto.core.eto_calculation.eto_services import (
+    EToCalculationService,
+)
+from validation_logic_eto.api.services.weather_utils import (
+    ElevationUtils,
+)
 
 
 # Configure logging
@@ -167,10 +172,13 @@ async def calculate_eto_longterm(
     try:
         opentopo = OpenTopoSyncAdapter()
         elevation_result = opentopo.get_elevation_sync(lat, lon)
-        elevation = elevation_result["elevation"]
-        logger.info(
-            f"   ✅ Elevation: {elevation:.1f}m (source: {elevation_result['source']})"
-        )
+        if elevation_result:
+            elevation = elevation_result.elevation
+            logger.info(
+                f"   ✅ Elevation: {elevation:.1f}m (dataset: {elevation_result.dataset})"
+            )
+        else:
+            raise ValueError("No elevation data")
     except Exception as e:
         elevation = metadata.get("elevation", 500)
         logger.warning(f"   ⚠️  Using fallback elevation: {elevation}m")
@@ -185,13 +193,15 @@ async def calculate_eto_longterm(
     )
     cache_dir = output_dir / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_file = cache_dir / f"{city_key}_{start_year}_{end_year}.parquet"
+    cache_file = cache_dir / f"{city_key}_{start_year}_{end_year}.csv"
 
     # Check for existing cache
     cached_years = set()
     if cache_file.exists():
         try:
-            df_cached = pd.read_parquet(cache_file)
+            df_cached = pd.read_csv(
+                cache_file, parse_dates=["date"], index_col="date"
+            )
             cached_years = set(df_cached.index.year.unique())
             logger.info(
                 f"\n📦 Step 2/4: Found cached data for {len(cached_years)} years"
@@ -258,8 +268,9 @@ async def calculate_eto_longterm(
                 df_weather, warnings = await download_historical_weather_data(
                     latitude=lat,
                     longitude=lon,
-                    start_date=year_start,
-                    end_date=year_end,
+                    start_date=year_start.strftime("%Y-%m-%d"),
+                    end_date=year_end.strftime("%Y-%m-%d"),
+                    use_fusion=True,
                 )
 
                 if warnings:
@@ -294,8 +305,8 @@ async def calculate_eto_longterm(
                         "elevation_m": elevation,
                         "T2M_MAX": row.get("T2M_MAX"),
                         "T2M_MIN": row.get("T2M_MIN"),
-                        "T2M_MEAN": row.get(
-                            "T2M_MEAN",
+                        "T2M": row.get(
+                            "T2M",
                             (row.get("T2M_MAX", 0) + row.get("T2M_MIN", 0))
                             / 2,
                         ),
@@ -345,7 +356,7 @@ async def calculate_eto_longterm(
             df_combined = pd.concat(
                 all_eto_data, ignore_index=False
             ).sort_index()
-            df_combined.to_parquet(cache_file)
+            df_combined.to_csv(cache_file)
             logger.debug(
                 f"      💾 Progress saved ({len(df_combined)} days total)"
             )
